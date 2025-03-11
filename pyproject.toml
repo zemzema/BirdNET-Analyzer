@@ -8,12 +8,12 @@ maintainers = [{ name = "Josef Haupt" }, { name = "Max Mauermann" }]
 keywords = ["birdnet", "birdnet-analyzer"]
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["librosa", "resampy", "tensorflow==2.15.0"]
+dependencies = ["librosa", "resampy", "tensorflow==2.15.0", "scikit-learn"]
 
 [project.optional-dependencies]
 train = ["tqdm", "keras-tuner"]
 server = ["bottle", "requests"]
-gui = ["gradio==5.16.1", "pywebview", "matplotlib", "plotly"]
+gui = ["gradio==5.16.1", "pywebview", "matplotlib", "plotly", "seaborn"]
 embeddings = ["perch-hoplite"]
 all = ["tqdm", "keras-tuner", "bottle", "requests", "gradio==5.16.1", "pywebview", "matplotlib", "plotly", "perch-hoplite"]
 
