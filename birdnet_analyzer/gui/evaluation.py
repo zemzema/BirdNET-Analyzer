@@ -1,10 +1,11 @@
-import os
 import json
-import gradio as gr
-import pandas as pd
-import matplotlib.pyplot as plt
-import tempfile
+import os
 import shutil
+import tempfile
+
+import gradio as gr
+import matplotlib.pyplot as plt
+import pandas as pd
 
 from birdnet_analyzer.evaluation.core import process_data
 from birdnet_analyzer.evaluation.preprocessing.data_processor import DataProcessor
@@ -88,10 +89,10 @@ def build_evaluation_tab():
         if files:
             for file_obj in files:
                 try:
-                    df = pd.read_csv(file_obj.name, sep=None, engine="python", nrows=0)
+                    df = pd.read_csv(file_obj, sep=None, engine="python", nrows=0)
                     columns.update(df.columns)
                 except Exception as e:
-                    print(f"Error reading file {file_obj.name}: {e}")
+                    print(f"Error reading file {file_obj}: {e}")
         return sorted(list(columns))
 
     def save_uploaded_files(files):
@@ -99,8 +100,8 @@ def build_evaluation_tab():
             return None
         temp_dir = tempfile.mkdtemp()
         for file_obj in files:
-            dest_path = os.path.join(temp_dir, os.path.basename(file_obj.name))
-            shutil.copy(file_obj.name, dest_path)
+            dest_path = os.path.join(temp_dir, os.path.basename(file_obj))
+            shutil.copy(file_obj, dest_path)
         return temp_dir
 
     # Single initialize_processor that can reuse given directories.
@@ -210,7 +211,7 @@ def build_evaluation_tab():
                 gr.update(choices=avail_recordings, value=new_recordings),
                 state)
 
-    with gr.TabItem("Evaluation"):
+    with gr.Tab("Evaluation"):
         # Custom CSS to match the layout style of other files and remove gray backgrounds.
         gr.Markdown(
             """
@@ -546,4 +547,5 @@ def build_evaluation_tab():
 
 if __name__ == "__main__":
     import birdnet_analyzer.gui.utils as gu
+
     gu.open_window(build_evaluation_tab)
