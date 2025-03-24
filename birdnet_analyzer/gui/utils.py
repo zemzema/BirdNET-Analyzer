@@ -219,7 +219,7 @@ def build_settings():
 
             with gr.Row():
                 theme_radio = gr.Radio(
-                    ["dark", "light"],
+                    [(loc.localize("settings-tab-theme-dropdown-dark-option"),"dark"), (loc.localize("settings-tab-theme-dropdown-light-option"), "light")],
                     value=lambda: settings.theme(),
                     label=loc.localize("settings-tab-theme-dropdown-label"),
                     info="⚠️" + loc.localize("settings-tab-theme-dropdown-info"),
@@ -246,10 +246,13 @@ def build_settings():
 
         def on_language_change(value):
             loc.set_language(value)
+            gr.Warning(loc.localize("settings-tab-language-dropdown-info"))
 
         def on_theme_change(value):
-            settings.set_setting("theme", value)
-            _WINDOW.load_url(_URL.rstrip("/") + f"?__theme={value}")
+            prev_theme = settings.theme()
+            if prev_theme != value:
+                settings.set_setting("theme", value)
+                _WINDOW.load_url(_URL.rstrip("/") + f"?__theme={value}")
 
         def on_tab_select(value: gr.SelectData):
             if value.selected and os.path.exists(cfg.ERROR_LOG_FILE):
