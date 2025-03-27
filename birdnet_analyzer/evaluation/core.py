@@ -29,7 +29,7 @@ def process_data(
     metrics_list: Tuple[str, ...] = ("accuracy", "precision", "recall"),
     threshold: float = 0.1,
     class_wise: bool = False,
-) -> Tuple:
+):
     """
     Processes data, computes metrics, and prepares the performance assessment pipeline.
 

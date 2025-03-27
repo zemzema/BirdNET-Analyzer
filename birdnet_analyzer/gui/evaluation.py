@@ -2,13 +2,21 @@ import json
 import os
 import shutil
 import tempfile
+import typing
 
 import gradio as gr
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from birdnet_analyzer.evaluation.assessment.performance_assessor import PerformanceAssessor
 from birdnet_analyzer.evaluation.core import process_data
 from birdnet_analyzer.evaluation.preprocessing.data_processor import DataProcessor
+
+
+class ProcessorState(typing.NamedTuple):
+    processor: DataProcessor
+    annotation_dir: str
+    prediction_dir: str
 
 
 def build_evaluation_tab():
@@ -53,7 +61,7 @@ def build_evaluation_tab():
 
         return gr.update(value=desired_path, visible=True)
 
-    def download_results_table(pa, predictions, labels, class_wise_value):
+    def download_results_table(pa: PerformanceAssessor, predictions, labels, class_wise_value):
         if pa is None or predictions is None or labels is None:
             return None
         try:
@@ -73,13 +81,11 @@ def build_evaluation_tab():
             print(f"Error saving results table: {e}")
             return None
 
-    def download_data_table(processor_state):
+    def download_data_table(processor_state: ProcessorState):
         if processor_state is None:
             return None
         try:
-            # If processor_state is a dict, extract the actual processor instance.
-            proc = processor_state.get("processor") if isinstance(processor_state, dict) else processor_state
-            data_df = proc.get_sample_data()
+            data_df = processor_state.processor.get_sample_data()
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
             data_df.to_csv(temp_file.name, index=False)
             temp_file.close()
@@ -224,7 +230,7 @@ def build_evaluation_tab():
         mapping_file_obj,
         sample_duration_value,
         min_overlap_value,
-        recording_duration_value,
+        recording_duration_value: str,
         ann_start_time,
         ann_end_time,
         ann_class,
@@ -272,7 +278,7 @@ def build_evaluation_tab():
             prediction_dir,
         )
         # Build a state dictionary to store the processor and the directories.
-        state = {"processor": proc, "annotation_dir": annotation_dir, "prediction_dir": prediction_dir}
+        state = ProcessorState(proc, annotation_dir, prediction_dir)
         # If no current selection exists, default to all available classes/recordings;
         # otherwise, preserve any selections that are still valid.
         new_classes = (
@@ -355,7 +361,7 @@ def build_evaluation_tab():
                     gr.Markdown(f"**{label_text}**")
 
             with gr.Row():
-                annotation_columns = {}
+                annotation_columns: dict[str, gr.Dropdown] = {}
 
                 for label_text in ["Start Time", "End Time", "Class", "Recording", "Duration"]:
                     annotation_columns[label_text] = gr.Dropdown(choices=[], label="", show_label=False)
@@ -550,12 +556,10 @@ def build_evaluation_tab():
         # calculate_metrics now uses the stored temporary directories from processor_state.
         # The function now accepts selected_classes and selected_recordings as inputs.
         def calculate_metrics(
-            annotation_files,
-            prediction_files,
             mapping_file_obj,
             sample_duration_value,
             min_overlap_value,
-            recording_duration_value,
+            recording_duration_value: str,
             ann_start_time,
             ann_end_time,
             ann_class,
@@ -569,27 +573,30 @@ def build_evaluation_tab():
             pred_duration,
             threshold_value,
             class_wise_value,
-            *extra_inputs,
+            selected_classes_list,
+            selected_recordings_list,
+            proc_state: ProcessorState,
+            *metrics_checkbox_values,
         ):
             # Expect extra_inputs to contain:
             # [metrics checkbox values..., selected_classes, selected_recordings, proc_state]
-            if len(extra_inputs) < 3:
-                return (
-                    "Missing processor state or selection values.",
-                    None,
-                    None,
-                    None,
-                    gr.update(),
-                    gr.update(),
-                    None,
-                    gr.update(visible=True),
-                )
+            # if len(extra_inputs) < 3:
+            #     return (
+            #         "Missing processor state or selection values.",
+            #         None,
+            #         None,
+            #         None,
+            #         gr.update(),
+            #         gr.update(),
+            #         None,
+            #         gr.update(visible=True),
+            #     )
 
             # Extract metrics checkbox values (assume there are 6 metrics)
-            metrics_checkbox_values = extra_inputs[:-3]
-            selected_classes_list = extra_inputs[-3] or []
-            selected_recordings_list = extra_inputs[-2] or None
-            proc_state = extra_inputs[-1]
+            # metrics_checkbox_values = extra_inputs
+            # selected_classes_list = extra_inputs[-3] or []
+            # selected_recordings_list = extra_inputs[-2] or None
+            # proc_state: DataProcessor = extra_inputs[-1]
             selected_metrics = []
 
             for value, (m_lower, _) in zip(metrics_checkbox_values, metrics_checkboxes.items()):
@@ -607,8 +614,8 @@ def build_evaluation_tab():
             metrics = tuple([valid_metrics[m] for m in selected_metrics if m in valid_metrics])
 
             # Fall back to available classes from processor state if none selected.
-            if not selected_classes_list and proc_state and proc_state.get("processor"):
-                selected_classes_list = list(proc_state.get("processor").classes)
+            if not selected_classes_list and proc_state and proc_state.processor:
+                selected_classes_list = list(proc_state.processor.classes)
 
             if not selected_classes_list:
                 return (
@@ -644,14 +651,10 @@ def build_evaluation_tab():
             else:
                 mapping_path = mapping_file_obj if mapping_file_obj else None
 
-            # Use the stored temporary directories from the processor state.
-            annotation_dir = proc_state.get("annotation_dir")
-            prediction_dir = proc_state.get("prediction_dir")
-
             try:
                 metrics_df, pa, preds, labs = process_data(
-                    annotation_path=annotation_dir,
-                    prediction_path=prediction_dir,
+                    annotation_path=proc_state.annotation_dir,
+                    prediction_path=proc_state.prediction_dir,
                     mapping_path=mapping_path,
                     sample_duration=sample_duration_value,
                     min_overlap=min_overlap_value,
@@ -688,8 +691,6 @@ def build_evaluation_tab():
         calculate_button.click(
             calculate_metrics,
             inputs=[
-                annotation_files,
-                prediction_files,
                 mapping_file,
                 sample_duration,
                 min_overlap,
@@ -707,9 +708,11 @@ def build_evaluation_tab():
                 prediction_columns["Duration"],
                 threshold,
                 class_wise,
+                select_classes_checkboxgroup,
+                select_recordings_checkboxgroup,
+                processor_state,
             ]
-            + [checkbox for checkbox in metrics_checkboxes.values()]
-            + [select_classes_checkboxgroup, select_recordings_checkboxgroup, processor_state],
+            + [checkbox for checkbox in metrics_checkboxes.values()],
             outputs=[
                 results_text,
                 pa_state,
@@ -722,7 +725,7 @@ def build_evaluation_tab():
             ],
         )
 
-        def plot_metrics(pa, predictions, labels, class_wise_value):
+        def plot_metrics(pa: PerformanceAssessor, predictions, labels, class_wise_value):
             if pa is None or predictions is None or labels is None:
                 return None, "Please calculate metrics first.", gr.update(visible=False)
             try:
@@ -739,7 +742,7 @@ def build_evaluation_tab():
             outputs=[plot_output, results_text, plot_output],
         )
 
-        def plot_confusion_matrix(pa, predictions, labels):
+        def plot_confusion_matrix(pa: PerformanceAssessor, predictions, labels):
             if pa is None or predictions is None or labels is None:
                 return None, "Please calculate metrics first.", gr.update(visible=False)
             try:
@@ -756,7 +759,7 @@ def build_evaluation_tab():
             outputs=[plot_output, results_text, plot_output],
         )
 
-        def plot_metrics_all_thresholds(pa, predictions, labels, class_wise_value):
+        def plot_metrics_all_thresholds(pa: PerformanceAssessor, predictions, labels, class_wise_value):
             if pa is None or predictions is None or labels is None:
                 return None, "Please calculate metrics first.", gr.update(visible=False)
             try:
