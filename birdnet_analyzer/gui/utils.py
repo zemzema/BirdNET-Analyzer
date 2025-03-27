@@ -9,7 +9,6 @@ import gradio as gr
 import webview
 
 import birdnet_analyzer.config as cfg
-import birdnet_analyzer.utils as utils
 
 FROZEN = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 
@@ -29,21 +28,49 @@ if FROZEN:
     APPDIR.mkdir(parents=True, exist_ok=True)
 
     sys.stderr = sys.stdout = open(str(APPDIR / "logs.txt"), "a")
-    cfg.ERROR_LOG_FILE = str(APPDIR / cfg.ERROR_LOG_FILE)
+    cfg.ERROR_LOG_FILE = str(APPDIR / os.path.basename(cfg.ERROR_LOG_FILE))
 
-import birdnet_analyzer.localization as loc  # noqa: E402
+import birdnet_analyzer.gui.settings as settings  # noqa: E402
+import birdnet_analyzer.utils as utils  # noqa: E402
+import birdnet_analyzer.gui.localization as loc  # noqa: E402
 
 loc.load_local_state()
 
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
 ORIGINAL_TRANSLATED_LABELS_PATH = str(Path(SCRIPT_DIR).parent / cfg.TRANSLATED_LABELS_PATH)
-LANG_DIR = str(Path(SCRIPT_DIR).parent / "lang")
 _CUSTOM_SPECIES = loc.localize("species-list-radio-option-custom-list")
 _PREDICT_SPECIES = loc.localize("species-list-radio-option-predict-list")
 _CUSTOM_CLASSIFIER = loc.localize("species-list-radio-option-custom-classifier")
 _ALL_SPECIES = loc.localize("species-list-radio-option-all")
 _WINDOW: webview.Window = None
+_URL = ""
 
+
+def gui_runtime_error_handler(f: callable):
+    """
+    A decorator function to handle errors during the execution of a callable.
+
+    This function attempts to execute the provided callable `f`. If an exception
+    occurs during execution, it logs the error using `utils.write_error_log` and
+    raises a `gr.Error` exception.
+
+    Args:
+        f (callable): The function or callable object to be executed.
+
+    Returns:
+        The result of the callable `f` if no exception occurs.
+
+    Raises:
+        gr.Error: If an exception is raised during the execution of `f`.
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except Exception as e:
+            utils.write_error_log(e)
+            raise gr.Error(message=str(e), duration=None) from e
+    
+    return wrapper
 
 # Nishant - Following two functions (select_folder andget_files_and_durations) are written for Folder selection
 def select_folder(state_key=None):
@@ -64,17 +91,17 @@ def select_folder(state_key=None):
         tk = Tk()
         tk.withdraw()
 
-        initial_dir = loc.get_state(state_key, None) if state_key else None
+        initial_dir = settings.get_state(state_key, None) if state_key else None
         folder_selected = filedialog.askdirectory(initialdir=initial_dir)
 
         tk.destroy()
     else:
-        initial_dir = loc.get_state(state_key, "") if state_key else ""
+        initial_dir = settings.get_state(state_key, "") if state_key else ""
         dirname = _WINDOW.create_file_dialog(webview.FOLDER_DIALOG, directory=initial_dir)
         folder_selected = dirname[0] if dirname else None
 
     if folder_selected and state_key:
-        loc.set_state(state_key, folder_selected)
+        settings.set_state(state_key, folder_selected)
 
     return folder_selected
 
@@ -205,21 +232,32 @@ def build_footer():
 
 def build_settings():
     with gr.Tab(loc.localize("settings-tab-title")) as settings_tab:
-        with gr.Row():
-            options = [lang.rsplit(".", 1)[0] for lang in os.listdir(LANG_DIR) if lang.endswith(".json")]
-            languages_dropdown = gr.Dropdown(
-                options,
-                value=loc.TARGET_LANGUAGE,
-                label=loc.localize("settings-tab-language-dropdown-label"),
-                info=loc.localize("settings-tab-language-dropdown-info"),
-                interactive=True,
-            )
+        with gr.Group():
+            with gr.Row():
+                options = [lang.rsplit(".", 1)[0] for lang in os.listdir(loc.LANGUAGE_DIR) if lang.endswith(".json")]
+                languages_dropdown = gr.Dropdown(
+                    options,
+                    value=loc.TARGET_LANGUAGE,
+                    label=loc.localize("settings-tab-language-dropdown-label"),
+                    info=loc.localize("settings-tab-language-dropdown-info"),
+                    interactive=True,
+                )
+
+            with gr.Row():
+                theme_radio = gr.Radio(
+                    [(loc.localize("settings-tab-theme-dropdown-dark-option"),"dark"), (loc.localize("settings-tab-theme-dropdown-light-option"), "light")],
+                    value=lambda: settings.theme(),
+                    label=loc.localize("settings-tab-theme-dropdown-label"),
+                    info="⚠️" + loc.localize("settings-tab-theme-dropdown-info"),
+                    interactive=True,
+                    scale=10,
+                )
 
         gr.Markdown(
             """
-                If you encounter a bug or error, please provide the error log.\n
-                You can submit an issue on our [GitHub](https://github.com/kahst/BirdNET-Analyzer/issues).
-                """,
+            If you encounter a bug or error, please provide the error log.\n
+            You can submit an issue on our [GitHub](https://github.com/birdnet-team/BirdNET-Analyzer/issues).
+            """,
             label=loc.localize("settings-tab-error-log-textbox-label"),
             elem_classes="mh-200",
         )
@@ -234,6 +272,13 @@ def build_settings():
 
         def on_language_change(value):
             loc.set_language(value)
+            gr.Warning(loc.localize("settings-tab-language-dropdown-info"))
+
+        def on_theme_change(value):
+            prev_theme = settings.theme()
+            if prev_theme != value:
+                settings.set_setting("theme", value)
+                _WINDOW.load_url(_URL.rstrip("/") + f"?__theme={value}")
 
         def on_tab_select(value: gr.SelectData):
             if value.selected and os.path.exists(cfg.ERROR_LOG_FILE):
@@ -245,7 +290,7 @@ def build_settings():
             return ""
 
         languages_dropdown.input(on_language_change, inputs=languages_dropdown, show_progress=False)
-
+        theme_radio.input(on_theme_change, inputs=theme_radio, show_progress=False)
         settings_tab.select(on_tab_select, outputs=error_log_tb, show_progress=False)
 
 
@@ -377,7 +422,7 @@ def locale():
 def plot_map_scatter_mapbox(lat, lon, zoom=4):
     import plotly.express as px
 
-    fig = px.scatter_mapbox(lat=[lat], lon=[lon], zoom=zoom, mapbox_style="open-street-map", size=[10])
+    fig = px.scatter_map(lat=[lat], lon=[lon], zoom=zoom, map_style="open-street-map", size=[10])
     # fig.update_traces(marker=dict(size=10, color="red"))  # Explicitly set color and size
     fig.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
     return fig
@@ -454,12 +499,12 @@ def select_file(filetypes=(), state_key=None):
     Returns:
         The selected file or None of the dialog was canceled.
     """
-    initial_selection = loc.get_state(state_key, "") if state_key else ""
+    initial_selection = settings.get_state(state_key, "") if state_key else ""
     files = _WINDOW.create_file_dialog(webview.OPEN_DIALOG, file_types=filetypes, directory=initial_selection)
 
     if files:
         if state_key:
-            loc.set_state(state_key, files[0])
+            settings.set_state(state_key, files[0])
 
         return files[0]
 
@@ -598,6 +643,7 @@ def open_window(builder: list[Callable] | Callable):
     Args:
         builder (list[Callable] | Callable): A callable or a list of callables that build the GUI components.
     """
+    global _URL
     multiprocessing.freeze_support()
 
     with gr.Blocks(
@@ -633,19 +679,35 @@ def open_window(builder: list[Callable] | Callable):
 
             demo.load(update_plots, inputs=inputs, outputs=outputs)
 
-    url = demo.queue(api_open=False).launch(
+    _URL = demo.queue(api_open=False).launch(
         prevent_thread_lock=True,
         quiet=True,
         show_api=False,
         enable_monitoring=False,
         allowed_paths=_get_win_drives() if sys.platform == "win32" else ["/"],
     )[1]
-    _WINDOW = webview.create_window("BirdNET-Analyzer", url.rstrip("/") + "?__theme=light", width=1300, height=900)
+    _WINDOW = webview.create_window(
+        "BirdNET-Analyzer", _URL.rstrip("/") + f"?__theme={settings.theme()}", width=1300, height=900
+    )
     set_window(_WINDOW)
 
     with suppress(ModuleNotFoundError):
         import pyi_splash  # type: ignore
 
         pyi_splash.close()
+
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        from webview.platforms.winforms import BrowserView
+
+        dwmapi = ctypes.windll.LoadLibrary("dwmapi")
+        _WINDOW.events.loaded += lambda: dwmapi.DwmSetWindowAttribute(
+            BrowserView.instances[_WINDOW.uid].Handle.ToInt32(),
+            20,  # DWMWA_USE_IMMERSIVE_DARK_MODE
+            ctypes.byref(ctypes.c_bool(settings.theme() == "dark")),
+            ctypes.sizeof(wintypes.BOOL),
+        )
 
     webview.start(private_mode=False)
