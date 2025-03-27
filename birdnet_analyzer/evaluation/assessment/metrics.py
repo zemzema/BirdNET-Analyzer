@@ -14,14 +14,15 @@ Functions:
     - calculate_auroc: Computes the Area Under the Receiver Operating Characteristic curve (AUROC).
 """
 
-from typing import Optional, Literal
+from typing import Literal, Optional
+
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
+    f1_score,
     precision_score,
     recall_score,
-    f1_score,
-    average_precision_score,
     roc_auc_score,
 )
 
@@ -82,9 +83,7 @@ def calculate_accuracy(
 
         elif averaging_method == "macro":
             # Macro-averaging: Compute accuracy per class and take the mean
-            accuracies = [
-                accuracy_score(y_true[:, i], y_pred[:, i]) for i in range(num_classes)
-            ]
+            accuracies = [accuracy_score(y_true[:, i], y_pred[:, i]) for i in range(num_classes)]
             acc = np.mean(accuracies)
             acc = np.array([acc])
 
@@ -94,18 +93,12 @@ def calculate_accuracy(
             for i in range(num_classes):
                 accuracies.append(accuracy_score(y_true[:, i], y_pred[:, i]))
                 weights.append(np.sum(y_true[:, i]))
-            acc = (
-                np.average(accuracies, weights=weights)
-                if sum(weights) > 0
-                else np.array([0.0])
-            )
+            acc = np.average(accuracies, weights=weights) if sum(weights) > 0 else np.array([0.0])
             acc = np.array([acc])
 
         elif averaging_method in [None, "none"]:
             # No averaging: Return accuracy per class
-            acc = np.array(
-                [accuracy_score(y_true[:, i], y_pred[:, i]) for i in range(num_classes)]
-            )
+            acc = np.array([accuracy_score(y_true[:, i], y_pred[:, i]) for i in range(num_classes)])
 
         else:
             # Unsupported averaging method
@@ -122,9 +115,7 @@ def calculate_recall(
     labels: np.ndarray,
     task: Literal["binary", "multilabel"],
     threshold: float,
-    averaging_method: Optional[
-        Literal["binary", "micro", "macro", "weighted", "samples", "none"]
-    ] = None,
+    averaging_method: Optional[Literal["binary", "micro", "macro", "weighted", "samples", "none"]] = None,
 ) -> np.ndarray:
     """
     Calculate recall for the given predictions and labels.
@@ -181,9 +172,7 @@ def calculate_precision(
     labels: np.ndarray,
     task: Literal["binary", "multilabel"],
     threshold: float,
-    averaging_method: Optional[
-        Literal["binary", "micro", "macro", "weighted", "samples", "none"]
-    ] = None,
+    averaging_method: Optional[Literal["binary", "micro", "macro", "weighted", "samples", "none"]] = None,
 ) -> np.ndarray:
     """
     Calculate precision for the given predictions and labels.
@@ -240,9 +229,7 @@ def calculate_f1_score(
     labels: np.ndarray,
     task: Literal["binary", "multilabel"],
     threshold: float,
-    averaging_method: Optional[
-        Literal["binary", "micro", "macro", "weighted", "samples", "none"]
-    ] = None,
+    averaging_method: Optional[Literal["binary", "micro", "macro", "weighted", "samples", "none"]] = None,
 ) -> np.ndarray:
     """
     Calculate the F1 score for the given predictions and labels.
@@ -298,9 +285,7 @@ def calculate_average_precision(
     predictions: np.ndarray,
     labels: np.ndarray,
     task: Literal["binary", "multilabel"],
-    averaging_method: Optional[
-        Literal["micro", "macro", "weighted", "samples", "none"]
-    ] = None,
+    averaging_method: Optional[Literal["micro", "macro", "weighted", "samples", "none"]] = None,
 ) -> np.ndarray:
     """
     Calculate the average precision (AP) for the given predictions and labels.
@@ -352,9 +337,7 @@ def calculate_auroc(
     predictions: np.ndarray,
     labels: np.ndarray,
     task: Literal["binary", "multilabel"],
-    averaging_method: Optional[
-        Literal["macro", "weighted", "samples", "none"]
-    ] = "macro",
+    averaging_method: Optional[Literal["macro", "weighted", "samples", "none"]] = "macro",
 ) -> np.ndarray:
     """
     Calculate the Area Under the Receiver Operating Characteristic curve (AUROC).

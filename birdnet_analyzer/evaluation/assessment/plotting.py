@@ -13,7 +13,8 @@ Functions:
     - plot_confusion_matrices: Visualizes confusion matrices for binary, multiclass, or multilabel tasks.
 """
 
-from typing import List, Dict, Literal
+from typing import Dict, List, Literal
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -171,9 +172,7 @@ def plot_metrics_across_thresholds(
             raise KeyError(f"Metric '{metric_name}' not found in metric_values_dict.")
         metric_values = metric_values_dict[metric_name]
         if len(metric_values) != len(thresholds):
-            raise ValueError(
-                f"Length of metric '{metric_name}' values does not match length of thresholds."
-            )
+            raise ValueError(f"Length of metric '{metric_name}' values does not match length of thresholds.")
         plt.plot(
             thresholds,
             metric_values,
@@ -259,18 +258,14 @@ def plot_metrics_across_thresholds_per_class(
     # Plot each class
     for class_idx, class_name in enumerate(class_names):
         if class_name not in metric_values_dict_per_class:
-            raise KeyError(
-                f"Class '{class_name}' not found in metric_values_dict_per_class."
-            )
+            raise KeyError(f"Class '{class_name}' not found in metric_values_dict_per_class.")
         ax = axes[class_idx]
         metric_values_dict = metric_values_dict_per_class[class_name]
 
         # Plot each metric for the current class
         for i, metric_name in enumerate(metrics_to_plot):
             if metric_name not in metric_values_dict:
-                raise KeyError(
-                    f"Metric '{metric_name}' not found for class '{class_name}'."
-                )
+                raise KeyError(f"Metric '{metric_name}' not found for class '{class_name}'.")
             metric_values = metric_values_dict[metric_name]
             if len(metric_values) != len(thresholds):
                 raise ValueError(
@@ -329,9 +324,7 @@ def plot_confusion_matrices(
     if conf_mat.size == 0:
         raise ValueError("conf_mat is empty.")
     if not isinstance(task, str) or task not in ["binary", "multiclass", "multilabel"]:
-        raise ValueError(
-            "Invalid task. Expected 'binary', 'multiclass', or 'multilabel'."
-        )
+        raise ValueError("Invalid task. Expected 'binary', 'multiclass', or 'multilabel'.")
     if not isinstance(class_names, list):
         raise TypeError("class_names must be a list.")
     if len(class_names) == 0:
@@ -342,9 +335,7 @@ def plot_confusion_matrices(
         if conf_mat.shape != (2, 2):
             raise ValueError("For binary task, conf_mat must be of shape (2, 2).")
         if len(class_names) != 2:
-            raise ValueError(
-                "For binary task, class_names must have exactly two elements."
-            )
+            raise ValueError("For binary task, class_names must have exactly two elements.")
 
         # Plot single confusion matrix
         fig = plt.figure(figsize=(4, 4))
@@ -357,13 +348,9 @@ def plot_confusion_matrices(
         # Multilabel or multiclass expects a set of 2x2 matrices
         num_labels = conf_mat.shape[0]
         if conf_mat.shape[1:] != (2, 2):
-            raise ValueError(
-                "For multilabel or multiclass task, conf_mat must have shape (num_labels, 2, 2)."
-            )
+            raise ValueError("For multilabel or multiclass task, conf_mat must have shape (num_labels, 2, 2).")
         if len(class_names) != num_labels:
-            raise ValueError(
-                "Length of class_names must match number of labels in conf_mat."
-            )
+            raise ValueError("Length of class_names must match number of labels in conf_mat.")
 
         # Determine grid size for subplots
         n_cols = int(np.ceil(np.sqrt(num_labels)))

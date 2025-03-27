@@ -27,9 +27,7 @@ def extract_recording_filename(path_column: pd.Series) -> pd.Series:
         pd.Series: A pandas Series containing the extracted recording filenames.
     """
     # Apply a lambda function to extract the base filename without extension
-    return path_column.apply(
-        lambda x: os.path.splitext(os.path.basename(x))[0] if isinstance(x, str) else x
-    )
+    return path_column.apply(lambda x: os.path.splitext(os.path.basename(x))[0] if isinstance(x, str) else x)
 
 
 def extract_recording_filename_from_filename(filename_series: pd.Series) -> pd.Series:
@@ -73,9 +71,7 @@ def read_and_concatenate_files_in_directory(directory_path: str) -> pd.DataFrame
     # Iterate through each file in the directory
     for filename in os.listdir(directory_path):
         if filename.endswith(".txt"):
-            filepath = os.path.join(
-                directory_path, filename
-            )  # Construct the full file path
+            filepath = os.path.join(directory_path, filename)  # Construct the full file path
 
             try:
                 # Attempt to read the file as a tab-separated values file with UTF-8 encoding
@@ -86,13 +82,9 @@ def read_and_concatenate_files_in_directory(directory_path: str) -> pd.DataFrame
 
             # Check for column consistency across files
             if columns_set is None:
-                columns_set = set(
-                    df.columns
-                )  # Initialize with the first file's columns
+                columns_set = set(df.columns)  # Initialize with the first file's columns
             elif set(df.columns) != columns_set:
-                raise ValueError(
-                    f"File {filename} has different columns than the previous files."
-                )
+                raise ValueError(f"File {filename} has different columns than the previous files.")
 
             # Add a column to indicate the source file for traceability
             df["source_file"] = filename

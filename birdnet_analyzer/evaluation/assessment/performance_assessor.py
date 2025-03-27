@@ -64,9 +64,7 @@ class PerformanceAssessor:
             if not isinstance(classes, tuple):
                 raise ValueError("classes must be a tuple of strings.")
             if len(classes) != num_classes:
-                raise ValueError(
-                    f"Length of classes ({len(classes)}) must match num_classes ({num_classes})."
-                )
+                raise ValueError(f"Length of classes ({len(classes)}) must match num_classes ({num_classes}).")
             if not all(isinstance(class_name, str) for class_name in classes):
                 raise ValueError("All elements in classes must be strings.")
 
@@ -79,9 +77,7 @@ class PerformanceAssessor:
         if not metrics_list:
             raise ValueError("metrics_list cannot be empty.")
         if not all(metric in valid_metrics for metric in metrics_list):
-            raise ValueError(
-                f"Invalid metrics in {metrics_list}. Valid options are {valid_metrics}."
-            )
+            raise ValueError(f"Invalid metrics in {metrics_list}. Valid options are {valid_metrics}.")
 
         # Assign instance variables
         self.num_classes = num_classes
@@ -197,18 +193,12 @@ class PerformanceAssessor:
 
         # Define column names for the DataFrame
         if per_class_metrics:
-            columns = (
-                self.classes
-                if self.classes
-                else [f"Class {i}" for i in range(self.num_classes)]
-            )
+            columns = self.classes if self.classes else [f"Class {i}" for i in range(self.num_classes)]
         else:
             columns = ["Overall"]
 
         # Create a DataFrame to organize metric results
-        metrics_data = {
-            key: np.atleast_1d(value) for key, value in metrics_results.items()
-        }
+        metrics_data = {key: np.atleast_1d(value) for key, value in metrics_results.items()}
         return pd.DataFrame.from_dict(metrics_data, orient="index", columns=columns)
 
     def plot_metrics(
@@ -275,33 +265,22 @@ class PerformanceAssessor:
 
         if per_class_metrics:
             # Define class names for plotting
-            class_names = (
-                list(self.classes)
-                if self.classes
-                else [f"Class {i}" for i in range(self.num_classes)]
-            )
+            class_names = list(self.classes) if self.classes else [f"Class {i}" for i in range(self.num_classes)]
 
             # Initialize a dictionary to store metric values per class
             metric_values_dict_per_class = {
-                class_name: {metric: [] for metric in metrics_to_plot}
-                for class_name in class_names
+                class_name: {metric: [] for metric in metrics_to_plot} for class_name in class_names
             }
 
             # Compute metrics for each threshold
             for thresh in thresholds:
                 self.threshold = thresh
-                metrics_df = self.calculate_metrics(
-                    predictions, labels, per_class_metrics=True
-                )
+                metrics_df = self.calculate_metrics(predictions, labels, per_class_metrics=True)
                 for metric_name in metrics_to_plot:
-                    metric_label = (
-                        metric_name.capitalize() if metric_name != "f1" else "F1"
-                    )
+                    metric_label = metric_name.capitalize() if metric_name != "f1" else "F1"
                     for class_name in class_names:
                         value = metrics_df.loc[metric_label, class_name]
-                        metric_values_dict_per_class[class_name][metric_name].append(
-                            value
-                        )
+                        metric_values_dict_per_class[class_name][metric_name].append(value)
 
             # Restore the original threshold
             self.threshold = original_threshold
@@ -321,13 +300,9 @@ class PerformanceAssessor:
             # Compute metrics for each threshold
             for thresh in thresholds:
                 self.threshold = thresh
-                metrics_df = self.calculate_metrics(
-                    predictions, labels, per_class_metrics=False
-                )
+                metrics_df = self.calculate_metrics(predictions, labels, per_class_metrics=False)
                 for metric_name in metrics_to_plot:
-                    metric_label = (
-                        metric_name.capitalize() if metric_name != "f1" else "F1"
-                    )
+                    metric_label = metric_name.capitalize() if metric_name != "f1" else "F1"
                     value = metrics_df.loc[metric_label, "Overall"]
                     metric_values_dict[metric_name].append(value)
 
@@ -387,9 +362,7 @@ class PerformanceAssessor:
             conf_mat = np.round(conf_mat, 2)
 
             # Plot the confusion matrix
-            disp = ConfusionMatrixDisplay(
-                confusion_matrix=conf_mat, display_labels=["Negative", "Positive"]
-            )
+            disp = ConfusionMatrixDisplay(confusion_matrix=conf_mat, display_labels=["Negative", "Positive"])
             fig, ax = plt.subplots(figsize=(6, 6))
             disp.plot(cmap="Reds", ax=ax, colorbar=False, values_format=".2f")
             ax.set_title("Confusion Matrix")
@@ -403,15 +376,9 @@ class PerformanceAssessor:
 
             # Compute confusion matrices for each class
             conf_mats = []
-            class_names = (
-                self.classes
-                if self.classes
-                else [f"Class {i}" for i in range(self.num_classes)]
-            )
+            class_names = self.classes if self.classes else [f"Class {i}" for i in range(self.num_classes)]
             for i in range(self.num_classes):
-                conf_mat = confusion_matrix(
-                    y_true[:, i], y_pred[:, i], normalize="true"
-                )
+                conf_mat = confusion_matrix(y_true[:, i], y_pred[:, i], normalize="true")
                 conf_mat = np.round(conf_mat, 2)
                 conf_mats.append(conf_mat)
 
@@ -426,12 +393,8 @@ class PerformanceAssessor:
 
             # Plot each confusion matrix
             for idx, (conf_mat, class_name) in enumerate(zip(conf_mats, class_names)):
-                disp = ConfusionMatrixDisplay(
-                    confusion_matrix=conf_mat, display_labels=["Negative", "Positive"]
-                )
-                disp.plot(
-                    cmap="Reds", ax=axes[idx], colorbar=False, values_format=".2f"
-                )
+                disp = ConfusionMatrixDisplay(confusion_matrix=conf_mat, display_labels=["Negative", "Positive"])
+                disp.plot(cmap="Reds", ax=axes[idx], colorbar=False, values_format=".2f")
                 axes[idx].set_title(f"{class_name}")
                 axes[idx].set_xlabel("Predicted class")
                 axes[idx].set_ylabel("True class")
