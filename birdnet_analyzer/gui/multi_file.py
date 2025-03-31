@@ -106,7 +106,7 @@ def build_multi_analysis_tab():
                     folder = gu.select_folder(state_key="batch-analysis-data-dir")
 
                     if folder:
-                        files_and_durations = gu.get_files_and_durations(folder)
+                        files_and_durations = gu.get_audio_files_and_durations(folder)
                         if len(files_and_durations) > 100:
                             return [folder, files_and_durations[:100] + [["..."]]]  # hopefully fixes issue#272
                         return [folder, files_and_durations]

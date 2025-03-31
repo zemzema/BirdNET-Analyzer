@@ -8,6 +8,7 @@ import gradio as gr
 import matplotlib.pyplot as plt
 import pandas as pd
 
+import birdnet_analyzer.gui.localization as loc
 from birdnet_analyzer.evaluation.assessment.performance_assessor import PerformanceAssessor
 from birdnet_analyzer.evaluation.core import process_data
 from birdnet_analyzer.evaluation.preprocessing.data_processor import DataProcessor
@@ -300,38 +301,69 @@ def build_evaluation_tab():
 
     with gr.Tab("Evaluation"):
         # Custom CSS to match the layout style of other files and remove gray backgrounds.
-        gr.Markdown(
-            """
-            <style>
-            body { background-color: #fff; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
-            .gradio-container { 
-                border: 1px solid #ccc; 
-                border-radius: 8px; 
-                padding: 16px; 
-                background-color: transparent; 
-            }
-            /* Override any group styles */
-            .gradio-group { 
-                background-color: transparent !important; 
-                border: none !important; 
-                box-shadow: none !important;
-            }
-            h2, h3 { color: #333; }
-            .custom-button { border-radius: 6px; }
-            /* Grid layout for checkbox groups */
-            .custom-checkbox-group { 
-                display: grid; 
-                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
-                grid-gap: 8px; 
-            }
-            </style>
-            """
-        )
+        # gr.Markdown(
+        #     """
+        #     <style>
+        #     body { background-color: #fff; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+        #     .gradio-container { 
+        #         border: 1px solid #ccc; 
+        #         border-radius: 8px; 
+        #         padding: 16px; 
+        #         background-color: transparent; 
+        #     }
+        #     /* Override any group styles */
+        #     .gradio-group { 
+        #         background-color: transparent !important; 
+        #         border: none !important; 
+        #         box-shadow: none !important;
+        #     }
+        #     h2, h3 { color: #333; }
+        #     .custom-button { border-radius: 6px; }
+        #     /* Grid layout for checkbox groups */
+        #     .custom-checkbox-group { 
+        #         display: grid; 
+        #         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
+        #         grid-gap: 8px; 
+        #     }
+        #     </style>
+        #     """
+        # )
 
         processor_state = gr.State()
         pa_state = gr.State()
         predictions_state = gr.State()
         labels_state = gr.State()
+        annotation_files_state = gr.State()
+        prediction_files_state = gr.State()
+
+        with gr.Row():
+            with gr.Column():
+                annotation_select_directory_btn = gr.Button(loc.localize("eval-tab-input-selection-button-label"))
+                annotation_directory_input = gr.Matrix(
+                    interactive=False,
+                    elem_classes="matrix-mh-200",
+                    headers=[
+                        loc.localize("eval-tab-samples-dataframe-column-subpath-header"),
+                    ],
+                )
+
+                def get_selection_func(state_key):
+                    def select_directory_on_empty():  # Nishant - Function modified for For Folder selection
+                        folder = gu.select_folder(state_key=state_key)
+
+                        if folder:
+                            files_and_durations = gu.get_audio_files_and_durations(folder)
+                            if len(files_and_durations) > 100:
+                                return [folder, files_and_durations[:100] + [["..."]]]
+                            return [folder, files_and_durations]
+
+                        return ["", [[loc.localize("multi-tab-samples-dataframe-no-files-found")]]]
+                    
+                    return select_directory_on_empty
+
+                annotation_select_directory_btn.click(
+                    get_selection_func("eval-annotations-dir"), outputs=[annotation_files_state, annotation_directory_input], show_progress=True
+                )
 
         # ----------------------- File Selection Box -----------------------
         with gr.Group():
@@ -482,7 +514,7 @@ def build_evaluation_tab():
         )
         download_data_button.click(fn=download_data_table, inputs=[processor_state], outputs=download_data_button)
         results_text = gr.Textbox(label="Results", lines=10, visible=False)
-        plot_output = gr.Plot(label="Plot", visible=False)
+        plot_output = gr.Plot(visible=False, show_label=False)
 
         # Update column dropdowns when files are uploaded.
         def update_annotation_columns(uploaded_files):
@@ -578,25 +610,6 @@ def build_evaluation_tab():
             proc_state: ProcessorState,
             *metrics_checkbox_values,
         ):
-            # Expect extra_inputs to contain:
-            # [metrics checkbox values..., selected_classes, selected_recordings, proc_state]
-            # if len(extra_inputs) < 3:
-            #     return (
-            #         "Missing processor state or selection values.",
-            #         None,
-            #         None,
-            #         None,
-            #         gr.update(),
-            #         gr.update(),
-            #         None,
-            #         gr.update(visible=True),
-            #     )
-
-            # Extract metrics checkbox values (assume there are 6 metrics)
-            # metrics_checkbox_values = extra_inputs
-            # selected_classes_list = extra_inputs[-3] or []
-            # selected_recordings_list = extra_inputs[-2] or None
-            # proc_state: DataProcessor = extra_inputs[-1]
             selected_metrics = []
 
             for value, (m_lower, _) in zip(metrics_checkbox_values, metrics_checkboxes.items()):

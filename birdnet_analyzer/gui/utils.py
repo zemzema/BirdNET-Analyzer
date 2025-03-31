@@ -72,7 +72,7 @@ def gui_runtime_error_handler(f: callable):
     
     return wrapper
 
-# Nishant - Following two functions (select_folder andget_files_and_durations) are written for Folder selection
+# Nishant - Following two functions (select_folder and get_files_and_durations) are written for Folder selection
 def select_folder(state_key=None):
     """
     Opens a folder selection dialog and returns the selected folder path.
@@ -106,7 +106,7 @@ def select_folder(state_key=None):
     return folder_selected
 
 
-def get_files_and_durations(folder, max_files=None):
+def get_audio_files_and_durations(folder, max_files=None):
     """
     Collects audio files from a specified folder and retrieves their durations.
     Args:
