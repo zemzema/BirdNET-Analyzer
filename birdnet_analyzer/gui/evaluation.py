@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 import birdnet_analyzer.gui.localization as loc
+import birdnet_analyzer.gui.utils as gu
 from birdnet_analyzer.evaluation.assessment.performance_assessor import PerformanceAssessor
 from birdnet_analyzer.evaluation.core import process_data
 from birdnet_analyzer.evaluation.preprocessing.data_processor import DataProcessor
@@ -80,7 +81,7 @@ def build_evaluation_tab():
             return gr.update(value=desired_path)
         except Exception as e:
             print(f"Error saving results table: {e}")
-            return None
+            raise gr.Error("Error saving results table") from e
 
     def download_data_table(processor_state: ProcessorState):
         if processor_state is None:
@@ -99,8 +100,7 @@ def build_evaluation_tab():
 
             return gr.update(value=desired_path)
         except Exception as e:
-            print(f"Error saving data table: {e}")
-            return None
+            raise gr.Error("Error saving data table") from e
 
     def get_columns_from_uploaded_files(files):
         columns = set()
@@ -112,6 +112,7 @@ def build_evaluation_tab():
                     columns.update(df.columns)
                 except Exception as e:
                     print(f"Error reading file {file_obj}: {e}")
+                    raise gr.Error(f"Error reading file {file_obj}") from e
 
         return sorted(list(columns))
 
@@ -218,9 +219,13 @@ def build_evaluation_tab():
             avail_recordings = proc.samples_df["filename"].unique().tolist()
 
             return avail_classes, avail_recordings, proc, annotation_dir, prediction_dir
+        except KeyError as e:
+            print(f"Column missing in files: {e}")
+            raise gr.Error("Column missing in files: " + str(e) + ". Please check the column names.") from e
         except Exception as e:
             print(f"Error initializing processor: {e}")
-            return [], [], None, None, None
+
+            raise gr.Error(loc.localize("eval-tab-selections-dataframe-error-message") + str(e)) from e
 
     # update_selections is triggered when files or mapping file change.
     # It creates the temporary directories once and stores them along with the processor.
@@ -301,33 +306,31 @@ def build_evaluation_tab():
 
     with gr.Tab("Evaluation"):
         # Custom CSS to match the layout style of other files and remove gray backgrounds.
-        # gr.Markdown(
-        #     """
-        #     <style>
-        #     body { background-color: #fff; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
-        #     .gradio-container { 
-        #         border: 1px solid #ccc; 
-        #         border-radius: 8px; 
-        #         padding: 16px; 
-        #         background-color: transparent; 
-        #     }
-        #     /* Override any group styles */
-        #     .gradio-group { 
-        #         background-color: transparent !important; 
-        #         border: none !important; 
-        #         box-shadow: none !important;
-        #     }
-        #     h2, h3 { color: #333; }
-        #     .custom-button { border-radius: 6px; }
-        #     /* Grid layout for checkbox groups */
-        #     .custom-checkbox-group { 
-        #         display: grid; 
-        #         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
-        #         grid-gap: 8px; 
-        #     }
-        #     </style>
-        #     """
-        # )
+        gr.Markdown(
+            """
+            <style>
+            //body { background-color: #fff; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+            // .gradio-container {
+            //     border: 1px solid #ccc;
+            //     border-radius: 8px;
+            //     padding: 16px;
+            //     background-color: transparent;
+            // }
+            /* Override any group styles */
+            //.gradio-group {
+            //    background-color: transparent !important;
+            //    border: none !important;
+            //    box-shadow: none !important;
+            //}
+            /* Grid layout for checkbox groups */
+            .custom-checkbox-group {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                grid-gap: 8px;
+            }
+            </style>
+            """
+        )
 
         processor_state = gr.State()
         pa_state = gr.State()
@@ -336,185 +339,12 @@ def build_evaluation_tab():
         annotation_files_state = gr.State()
         prediction_files_state = gr.State()
 
-        with gr.Row():
-            with gr.Column():
-                annotation_select_directory_btn = gr.Button(loc.localize("eval-tab-input-selection-button-label"))
-                annotation_directory_input = gr.Matrix(
-                    interactive=False,
-                    elem_classes="matrix-mh-200",
-                    headers=[
-                        loc.localize("eval-tab-samples-dataframe-column-subpath-header"),
-                    ],
-                )
+        def get_selection_tables(directory):
+            from pathlib import Path
 
-                def get_selection_func(state_key):
-                    def select_directory_on_empty():  # Nishant - Function modified for For Folder selection
-                        folder = gu.select_folder(state_key=state_key)
+            directory = Path(directory)
 
-                        if folder:
-                            files_and_durations = gu.get_audio_files_and_durations(folder)
-                            if len(files_and_durations) > 100:
-                                return [folder, files_and_durations[:100] + [["..."]]]
-                            return [folder, files_and_durations]
-
-                        return ["", [[loc.localize("multi-tab-samples-dataframe-no-files-found")]]]
-                    
-                    return select_directory_on_empty
-
-                annotation_select_directory_btn.click(
-                    get_selection_func("eval-annotations-dir"), outputs=[annotation_files_state, annotation_directory_input], show_progress=True
-                )
-
-        # ----------------------- File Selection Box -----------------------
-        with gr.Group():
-            gr.Markdown("### File Selection")
-
-            with gr.Row():
-                with gr.Column():
-                    gr.Markdown("**Annotations Files:**")
-                    gr.Markdown("<small>Select the files containing the true labels for evaluation.</small>")
-                    annotation_files = gr.File(
-                        label="Select Annotation Files", file_count="multiple", file_types=[".csv", ".txt"]
-                    )
-
-                with gr.Column():
-                    gr.Markdown("**Predictions Files:**")
-                    gr.Markdown("<small>Select the files containing the model's predictions.</small>")
-                    prediction_files = gr.File(
-                        label="Select Prediction Files", file_count="multiple", file_types=[".csv", ".txt"]
-                    )
-
-        # ----------------------- Annotations Columns Box -----------------------
-        with gr.Group():
-            gr.Markdown("### Annotations Columns")
-
-            with gr.Row():
-                for label_text in ["Start Time", "End Time", "Class", "Recording", "Duration"]:
-                    gr.Markdown(f"**{label_text}**")
-
-            with gr.Row():
-                annotation_columns: dict[str, gr.Dropdown] = {}
-
-                for label_text in ["Start Time", "End Time", "Class", "Recording", "Duration"]:
-                    annotation_columns[label_text] = gr.Dropdown(choices=[], label="", show_label=False)
-
-        # ----------------------- Predictions Columns Box -----------------------
-        with gr.Group():
-            gr.Markdown("### Predictions Columns")
-
-            with gr.Row():
-                for label_text in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]:
-                    gr.Markdown(f"**{label_text}**")
-
-            with gr.Row():
-                prediction_columns = {}
-
-                for label_text in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]:
-                    prediction_columns[label_text] = gr.Dropdown(choices=[], label="", show_label=False)
-
-        # ----------------------- Class Mapping Box -----------------------
-        with gr.Group():
-            gr.Markdown("### Class Mapping (Optional)")
-            gr.Markdown(
-                "<small>If class names differ between prediction and annotation files, use a class mapping JSON file.</small>"
-            )
-            gr.Markdown(
-                "<small>Click 'Download Template' to get a JSON template for mapping class names between prediction and annotation files.</small>"
-            )
-
-            with gr.Row():
-                mapping_file = gr.File(label="Upload Mapping File", file_count="single", file_types=[".json"])
-                download_mapping_button = gr.DownloadButton(
-                    label="Download Template", visible=True, variant="huggingface"
-                )
-
-            download_mapping_button.click(
-                fn=download_class_mapping_template, inputs=[], outputs=download_mapping_button
-            )
-
-        # ----------------------- Classes and Recordings Selection Box -----------------------
-        with gr.Group():
-            with gr.Row():
-                with gr.Column():
-                    gr.Markdown("### Select Classes:")
-                    gr.Markdown("<small>Select the classes to calculate the metrics.</small>")
-                    select_classes_checkboxgroup = gr.CheckboxGroup(
-                        choices=[], value=[], label="", interactive=True, elem_classes="custom-checkbox-group"
-                    )
-
-                with gr.Column():
-                    gr.Markdown("### Select Recordings:")
-                    gr.Markdown("<small>Select the recordings to calculate the metrics.</small>")
-                    select_recordings_checkboxgroup = gr.CheckboxGroup(
-                        choices=[], value=[], label="", interactive=True, elem_classes="custom-checkbox-group"
-                    )
-
-        # ----------------------- Parameters Box -----------------------
-        gr.Markdown("### Parameters")
-
-        with gr.Row():
-            sample_duration = gr.Number(
-                value=3, label="Sample Duration (s)", precision=0, info="Audio sample length (in seconds)."
-            )
-            recording_duration = gr.Textbox(
-                label="Recording Duration (s)",
-                placeholder="Determined from files",
-                info="Inferred from the data if not specified.",
-            )
-            min_overlap = gr.Number(
-                value=0.5, label="Minimum Overlap (s)", info="Overlap needed to assign an annotation to a sample."
-            )
-            threshold = gr.Slider(
-                minimum=0.01,
-                maximum=0.99,
-                value=0.1,
-                label="Threshold",
-                info="Threshold for classifying a prediction as positive.",
-            )
-            class_wise = gr.Checkbox(
-                label="Class-wise Metrics", value=False, info="Calculate metrics separately for each class."
-            )
-
-        # ----------------------- Metrics Box -----------------------
-        gr.Markdown("### Metrics")
-
-        with gr.Row():
-            metric_info = {
-                "AUROC": "AUROC measures the likelihood that the model ranks a random positive case higher than a random negative case.",
-                "Precision": "Precision measures how often the model's positive predictions are actually correct.",
-                "Recall": "Recall measures the percentage of actual positive cases correctly identified by the model for each class.",
-                "F1 Score": "The F1 score is the harmonic mean of precision and recall, balancing both metrics.",
-                "Average Precision (AP)": "Average Precision summarizes the precision-recall curve by averaging precision across all recall levels.",
-                "Accuracy": "Accuracy measures the percentage of correct predictions made by the model.",
-            }
-            metrics_checkboxes = {}
-
-            for metric_name, description in metric_info.items():
-                metrics_checkboxes[metric_name.lower()] = gr.Checkbox(label=metric_name, value=True, info=description)
-
-        # ----------------------- Actions Box -----------------------
-        gr.Markdown("### Actions")
-
-        with gr.Row():
-            calculate_button = gr.Button("Calculate Metrics", variant="huggingface")
-            plot_metrics_button = gr.Button("Plot Metrics", variant="huggingface")
-            plot_confusion_button = gr.Button("Plot Confusion Matrix", variant="huggingface")
-            plot_metrics_all_thresholds_button = gr.Button("Plot Metrics All Thresholds", variant="huggingface")
-
-        with gr.Row():
-            download_results_button = gr.DownloadButton(
-                label="Download Results Table", visible=True, variant="huggingface"
-            )
-            download_data_button = gr.DownloadButton(label="Download Data Table", visible=True, variant="huggingface")
-
-        download_results_button.click(
-            fn=download_results_table,
-            inputs=[pa_state, predictions_state, labels_state, class_wise],
-            outputs=download_results_button,
-        )
-        download_data_button.click(fn=download_data_table, inputs=[processor_state], outputs=download_data_button)
-        results_text = gr.Textbox(label="Results", lines=10, visible=False)
-        plot_output = gr.Plot(visible=False, show_label=False)
+            return list(directory.glob("*.txt"))
 
         # Update column dropdowns when files are uploaded.
         def update_annotation_columns(uploaded_files):
@@ -541,29 +371,173 @@ def build_evaluation_tab():
 
             return updates
 
-        annotation_files.change(
-            fn=update_annotation_columns,
-            inputs=annotation_files,
-            outputs=[
-                annotation_columns[label] for label in ["Start Time", "End Time", "Class", "Recording", "Duration"]
-            ],
+        def get_selection_func(state_key, on_select):
+            def select_directory_on_empty():  # Nishant - Function modified for For Folder selection
+                folder = gu.select_folder(state_key=state_key)
+
+                if folder:
+                    files = get_selection_tables(folder)
+                    files_to_display = files[:100] + [["..."]] if len(files) > 100 else files
+                    return [files, files_to_display, gr.update(visible=True)] + on_select(files)
+
+                return ["", [[loc.localize("eval-tab-selections-dataframe-no-files-found")]]]
+
+            return select_directory_on_empty
+
+        with gr.Row():
+            with gr.Column():
+                annotation_select_directory_btn = gr.Button(loc.localize("eval-tab-annotation-selection-button-label"))
+                annotation_directory_input = gr.Matrix(
+                    interactive=False,
+                    headers=[
+                        loc.localize("eval-tab-selections-dataframe-column-subpath-header"),
+                    ],
+                )
+
+            with gr.Column():
+                prediction_select_directory_btn = gr.Button(loc.localize("eval-tab-prediction-selection-button-label"))
+                prediction_directory_input = gr.Matrix(
+                    interactive=False,
+                    headers=[
+                        loc.localize("eval-tab-selections-dataframe-column-subpath-header"),
+                    ],
+                )
+
+        # ----------------------- Annotations Columns Box -----------------------
+        with gr.Group(visible=False) as annotation_group:
+            with gr.Accordion("Annotations Columns", open=True):
+                with gr.Row():
+                    annotation_columns: dict[str, gr.Dropdown] = {}
+
+                    for label_text in ["Start Time", "End Time", "Class", "Recording", "Duration"]:
+                        annotation_columns[label_text] = gr.Dropdown(choices=[], label=label_text)
+
+        # ----------------------- Predictions Columns Box -----------------------
+        with gr.Group(visible=False) as prediction_group:
+            with gr.Accordion("Predictions Columns", open=True):
+                with gr.Row():
+                    prediction_columns: dict[str, gr.Dropdown] = {}
+
+                    for label_text in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]:
+                        prediction_columns[label_text] = gr.Dropdown(choices=[], label=label_text)
+
+        # ----------------------- Class Mapping Box -----------------------
+        with gr.Group(visible=False) as mapping_group:
+            with gr.Accordion("Class Mapping (Optional)", open=False):
+                with gr.Row():
+                    mapping_file = gr.File(label="Upload Mapping File", file_count="single", file_types=[".json"])
+                    download_mapping_button = gr.DownloadButton(label="Download Template")
+
+            download_mapping_button.click(
+                fn=download_class_mapping_template, inputs=[], outputs=download_mapping_button
+            )
+
+        # ----------------------- Classes and Recordings Selection Box -----------------------
+        with gr.Group(visible=False) as class_recording_group:
+            with gr.Accordion("Select Classes and Recordings", open=False):
+                with gr.Row():
+                    with gr.Column():
+                        select_classes_checkboxgroup = gr.CheckboxGroup(
+                            choices=[],
+                            value=[],
+                            label="Select Classes",
+                            info="Select the classes to calculate the metrics.",
+                            interactive=True,
+                            elem_classes="custom-checkbox-group",
+                        )
+
+                    with gr.Column():
+                        select_recordings_checkboxgroup = gr.CheckboxGroup(
+                            choices=[],
+                            value=[],
+                            label="Select Recordings",
+                            info="Select the recordings to calculate the metrics.",
+                            interactive=True,
+                            elem_classes="custom-checkbox-group",
+                        )
+
+        # ----------------------- Parameters Box -----------------------
+        with gr.Group():
+            with gr.Accordion("Parameters", open=False):
+                with gr.Row():
+                    sample_duration = gr.Number(
+                        value=3, label="Sample Duration (s)", precision=0, info="Audio sample length (in seconds)."
+                    )
+                    recording_duration = gr.Textbox(
+                        label="Recording Duration (s)",
+                        placeholder="Determined from files",
+                        info="Inferred from the data if not specified.",
+                    )
+                    min_overlap = gr.Number(
+                        value=0.5,
+                        label="Minimum Overlap (s)",
+                        info="Overlap needed to assign an annotation to a sample.",
+                    )
+                    threshold = gr.Slider(
+                        minimum=0.01,
+                        maximum=0.99,
+                        value=0.1,
+                        label="Threshold",
+                        info="Threshold for classifying a prediction as positive.",
+                    )
+                    class_wise = gr.Checkbox(
+                        label="Class-wise Metrics", value=False, info="Calculate metrics separately for each class."
+                    )
+
+        # ----------------------- Metrics Box -----------------------
+        with gr.Group():
+            with gr.Accordion("Select Metrics", open=False):
+                with gr.Row():
+                    metric_info = {
+                        "AUROC": "AUROC measures the likelihood that the model ranks a random positive case higher than a random negative case.",
+                        "Precision": "Precision measures how often the model's positive predictions are actually correct.",
+                        "Recall": "Recall measures the percentage of actual positive cases correctly identified by the model for each class.",
+                        "F1 Score": "The F1 score is the harmonic mean of precision and recall, balancing both metrics.",
+                        "Average Precision (AP)": "Average Precision summarizes the precision-recall curve by averaging precision across all recall levels.",
+                        "Accuracy": "Accuracy measures the percentage of correct predictions made by the model.",
+                    }
+                    metrics_checkboxes = {}
+
+                    for metric_name, description in metric_info.items():
+                        metrics_checkboxes[metric_name.lower()] = gr.Checkbox(
+                            label=metric_name, value=True, info=description
+                        )
+
+        # ----------------------- Actions Box -----------------------
+        with gr.Row():
+            calculate_button = gr.Button("Calculate Metrics", variant="huggingface")
+            plot_metrics_button = gr.Button("Plot Metrics", variant="huggingface")
+            plot_confusion_button = gr.Button("Plot Confusion Matrix", variant="huggingface")
+            plot_metrics_all_thresholds_button = gr.Button("Plot Metrics All Thresholds", variant="huggingface")
+
+        with gr.Row():
+            download_results_button = gr.DownloadButton(
+                label="Download Results Table", visible=True, variant="huggingface"
+            )
+            download_data_button = gr.DownloadButton(label="Download Data Table", visible=True, variant="huggingface")
+
+        download_results_button.click(
+            fn=download_results_table,
+            inputs=[pa_state, predictions_state, labels_state, class_wise],
+            outputs=download_results_button,
         )
-        prediction_files.change(
-            fn=update_prediction_columns,
-            inputs=prediction_files,
-            outputs=[
-                prediction_columns[label]
-                for label in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]
-            ],
+        download_data_button.click(fn=download_data_table, inputs=[processor_state], outputs=download_data_button)
+        # results_text = gr.Textbox(label="Results", lines=10, visible=False)
+        metric_table = gr.Dataframe(
+            show_label=False,
+            type="pandas",
+            visible=False,
         )
+        plot_output = gr.Plot(visible=False, show_label=False)
+
         # Update available selections (classes and recordings) and the processor state when files or mapping file change.
         # Also pass the current selection values so that user selections are preserved.
         for comp in list(annotation_columns.values()) + list(prediction_columns.values()) + [mapping_file]:
             comp.change(
                 fn=update_selections,
                 inputs=[
-                    annotation_files,
-                    prediction_files,
+                    annotation_files_state,
+                    prediction_files_state,
                     mapping_file,
                     sample_duration,
                     min_overlap,
@@ -582,7 +556,11 @@ def build_evaluation_tab():
                     select_classes_checkboxgroup,
                     select_recordings_checkboxgroup,
                 ],
-                outputs=[select_classes_checkboxgroup, select_recordings_checkboxgroup, processor_state],
+                outputs=[
+                    select_classes_checkboxgroup,
+                    select_recordings_checkboxgroup,
+                    processor_state,
+                ],
             )
 
         # calculate_metrics now uses the stored temporary directories from processor_state.
@@ -631,33 +609,15 @@ def build_evaluation_tab():
                 selected_classes_list = list(proc_state.processor.classes)
 
             if not selected_classes_list:
-                return (
-                    "Error: At least one class must be selected.",
-                    None,
-                    None,
-                    None,
-                    gr.update(),
-                    gr.update(),
-                    proc_state,
-                    gr.update(visible=True),
-                )
+                raise gr.Error("Error: At least one class must be selected.")
 
             if recording_duration_value.strip() == "":
                 rec_dur = None
             else:
                 try:
                     rec_dur = float(recording_duration_value)
-                except ValueError:
-                    return (
-                        "Please enter a valid number for Recording Duration.",
-                        None,
-                        None,
-                        None,
-                        gr.update(),
-                        gr.update(),
-                        proc_state,
-                        gr.update(visible=True),
-                    )
+                except ValueError as e:
+                    raise gr.Error("Error: Please enter a valid number for Recording Duration.") from e
 
             if mapping_file_obj and hasattr(mapping_file_obj, "temp_files"):
                 mapping_path = list(mapping_file_obj.temp_files)[0]
@@ -693,12 +653,21 @@ def build_evaluation_tab():
                     threshold=threshold_value,
                     class_wise=class_wise_value,
                 )
-                result_text = metrics_df.to_string()
 
-                return (result_text, pa, preds, labs, gr.update(), gr.update(), proc_state, gr.update(visible=True))
+                table = metrics_df.T.reset_index(names=[""])
+
+                return (
+                    gr.update(value=table, visible=True),
+                    pa,
+                    preds,
+                    labs,
+                    gr.update(),
+                    gr.update(),
+                    proc_state,
+                )
             except Exception as e:
-                result_text = f"Error processing data: {e}"
-                return (result_text, None, None, None, gr.update(), gr.update(), proc_state, gr.update(visible=True))
+                print("Error processing data:", e)
+                raise gr.Error("Error processing data.") from e
 
         # Updated calculate_button click now passes the selected classes and recordings.
         calculate_button.click(
@@ -727,49 +696,80 @@ def build_evaluation_tab():
             ]
             + [checkbox for checkbox in metrics_checkboxes.values()],
             outputs=[
-                results_text,
+                metric_table,
                 pa_state,
                 predictions_state,
                 labels_state,
                 select_classes_checkboxgroup,
                 select_recordings_checkboxgroup,
                 processor_state,
-                results_text,
             ],
         )
 
         def plot_metrics(pa: PerformanceAssessor, predictions, labels, class_wise_value):
             if pa is None or predictions is None or labels is None:
-                return None, "Please calculate metrics first.", gr.update(visible=False)
+                raise gr.Error("Please calculate metrics first.", print_exception=False)
             try:
                 fig = pa.plot_metrics(predictions, labels, per_class_metrics=class_wise_value)
                 plt.close(fig)
 
-                return fig, None, gr.update(visible=True)
+                return fig, gr.update(visible=True)
             except Exception as e:
-                return None, f"Error plotting metrics: {e}", gr.update(visible=False)
+                raise gr.Error(f"Error plotting metrics: {e}") from e
 
         plot_metrics_button.click(
             plot_metrics,
             inputs=[pa_state, predictions_state, labels_state, class_wise],
-            outputs=[plot_output, results_text, plot_output],
+            outputs=[plot_output, plot_output],
         )
 
         def plot_confusion_matrix(pa: PerformanceAssessor, predictions, labels):
             if pa is None or predictions is None or labels is None:
-                return None, "Please calculate metrics first.", gr.update(visible=False)
+                raise gr.Error("Please calculate metrics first.", print_exception=False)
             try:
                 fig = pa.plot_confusion_matrix(predictions, labels)
                 plt.close(fig)
 
-                return fig, None, gr.update(visible=True)
+                return fig, gr.update(visible=True)
             except Exception as e:
-                return None, f"Error plotting confusion matrix: {e}", gr.update(visible=False)
+                raise gr.Error(f"Error plotting confusion matrix: {e}") from e
 
         plot_confusion_button.click(
             plot_confusion_matrix,
             inputs=[pa_state, predictions_state, labels_state],
-            outputs=[plot_output, results_text, plot_output],
+            outputs=[plot_output, plot_output],
+        )
+
+        annotation_select_directory_btn.click(
+            get_selection_func("eval-annotations-dir", update_annotation_columns),
+            outputs=[annotation_files_state, annotation_directory_input, annotation_group]
+            + [annotation_columns[label] for label in ["Start Time", "End Time", "Class", "Recording", "Duration"]],
+            show_progress=True,
+        )
+
+        prediction_select_directory_btn.click(
+            get_selection_func("eval-predictions-dir", update_prediction_columns),
+            outputs=[prediction_files_state, prediction_directory_input, prediction_group]
+            + [
+                prediction_columns[label]
+                for label in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]
+            ],
+            show_progress=True,
+        )
+
+        def toggle_after_selection(annotation_files, prediction_files):
+            return [gr.update(visible=annotation_files and prediction_files)] * 2
+
+        annotation_directory_input.change(
+            toggle_after_selection,
+            inputs=[annotation_files_state, prediction_files_state],
+            outputs=[mapping_group, class_recording_group],
+        )
+
+        prediction_directory_input.change(
+            toggle_after_selection,
+            inputs=[annotation_files_state, prediction_files_state],
+            outputs=[mapping_group, class_recording_group],
         )
 
         def plot_metrics_all_thresholds(pa: PerformanceAssessor, predictions, labels, class_wise_value):
@@ -779,18 +779,16 @@ def build_evaluation_tab():
                 fig = pa.plot_metrics_all_thresholds(predictions, labels, per_class_metrics=class_wise_value)
                 plt.close(fig)
 
-                return fig, None, gr.update(visible=True)
+                return fig, gr.update(visible=True)
             except Exception as e:
-                return None, f"Error plotting metrics for all thresholds: {e}", gr.update(visible=False)
+                raise gr.Error(f"Error plotting metrics for all thresholds: {e}") from e
 
         plot_metrics_all_thresholds_button.click(
             plot_metrics_all_thresholds,
             inputs=[pa_state, predictions_state, labels_state, class_wise],
-            outputs=[plot_output, results_text, plot_output],
+            outputs=[plot_output, plot_output],
         )
 
 
 if __name__ == "__main__":
-    import birdnet_analyzer.gui.utils as gu
-
     gu.open_window(build_evaluation_tab)
