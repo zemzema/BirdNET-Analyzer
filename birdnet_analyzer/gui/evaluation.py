@@ -522,7 +522,6 @@ def build_evaluation_tab():
             outputs=download_results_button,
         )
         download_data_button.click(fn=download_data_table, inputs=[processor_state], outputs=download_data_button)
-        # results_text = gr.Textbox(label="Results", lines=10, visible=False)
         metric_table = gr.Dataframe(
             show_label=False,
             type="pandas",
@@ -774,7 +773,7 @@ def build_evaluation_tab():
 
         def plot_metrics_all_thresholds(pa: PerformanceAssessor, predictions, labels, class_wise_value):
             if pa is None or predictions is None or labels is None:
-                return None, "Please calculate metrics first.", gr.update(visible=False)
+                raise gr.Error("Please calculate metrics first.", print_exception=False)
             try:
                 fig = pa.plot_metrics_all_thresholds(predictions, labels, per_class_metrics=class_wise_value)
                 plt.close(fig)
