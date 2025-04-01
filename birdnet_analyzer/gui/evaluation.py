@@ -16,6 +16,8 @@ from birdnet_analyzer.evaluation.preprocessing.data_processor import DataProcess
 
 
 class ProcessorState(typing.NamedTuple):
+    """State of the DataProcessor."""
+
     processor: DataProcessor
     annotation_dir: str
     prediction_dir: str
@@ -41,66 +43,84 @@ def build_evaluation_tab():
         "Confidence": "Confidence",
     }
 
+    localized_column_labels = {
+        "Start Time": loc.localize("eval-tab-column-start-time-label"),
+        "End Time": loc.localize("eval-tab-column-end-time-label"),
+        "Class": loc.localize("eval-tab-column-class-label"),
+        "Recording": loc.localize("eval-tab-column-recording-label"),
+        "Duration": loc.localize("eval-tab-column-duration-label"),
+        "Confidence": loc.localize("eval-tab-column-confidence-label"),
+    }
+
     def download_class_mapping_template():
-        template_mapping = {
-            "Predicted Class Name 1": "Annotation Class Name 1",
-            "Predicted Class Name 2": "Annotation Class Name 2",
-            "Predicted Class Name 3": "Annotation Class Name 3",
-            "Predicted Class Name 4": "Annotation Class Name 4",
-            "Predicted Class Name 5": "Annotation Class Name 5",
-        }
-        fd, temp_path = tempfile.mkstemp(suffix=".json")
+        try:
+            template_mapping = {
+                "Predicted Class Name 1": "Annotation Class Name 1",
+                "Predicted Class Name 2": "Annotation Class Name 2",
+                "Predicted Class Name 3": "Annotation Class Name 3",
+                "Predicted Class Name 4": "Annotation Class Name 4",
+                "Predicted Class Name 5": "Annotation Class Name 5",
+            }
 
-        with os.fdopen(fd, "w") as f:
-            json.dump(template_mapping, f, indent=4)
+            file_location = gu.save_file_dialog(
+                state_key="eval-mapping-template",
+                filetypes=("JSON (*.json)",),
+                default_filename="class_mapping_template.json",
+            )
 
-        desired_path = os.path.join(os.path.dirname(temp_path), "class_mapping_template.json")
+            if file_location:
+                with open(file_location, "w") as f:
+                    json.dump(template_mapping, f, indent=4)
 
-        if os.path.exists(desired_path):
-            os.remove(desired_path)
-
-        os.rename(temp_path, desired_path)
-
-        return gr.update(value=desired_path, visible=True)
+                gr.Info(loc.localize("eval-tab-info-mapping-template-saved"))
+        except Exception as e:
+            print(f"Error saving mapping template: {e}")
+            raise gr.Error(f"{loc.localize('eval-tab-error-saving-mapping-template')} {e}") from e
 
     def download_results_table(pa: PerformanceAssessor, predictions, labels, class_wise_value):
         if pa is None or predictions is None or labels is None:
-            return None
+            raise gr.Error(loc.localize("eval-tab-error-calc-metrics-first"), print_exception=False)
+
         try:
-            metrics_df = pa.calculate_metrics(predictions, labels, per_class_metrics=class_wise_value)
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-            metrics_df.to_csv(temp_file.name, index=True)
-            temp_file.close()
-            desired_path = os.path.join(os.path.dirname(temp_file.name), "results_table.csv")
+            file_location = gu.save_file_dialog(
+                state_key="eval-results-table",
+                filetypes=("CSV (*.csv;*.CSV)", "TSV (*.tsv;*.TSV)"),
+                default_filename="results_table.csv",
+            )
 
-            if os.path.exists(desired_path):
-                os.remove(desired_path)
+            if file_location:
+                metrics_df = pa.calculate_metrics(predictions, labels, per_class_metrics=class_wise_value)
 
-            os.rename(temp_file.name, desired_path)
+                if file_location.split(".")[-1].lower() == "tsv":
+                    metrics_df.to_csv(file_location, sep="\t", index=True)
+                else:
+                    metrics_df.to_csv(file_location, index=True)
 
-            return gr.update(value=desired_path)
+                gr.Info(loc.localize("eval-tab-info-results-table-saved"))
         except Exception as e:
             print(f"Error saving results table: {e}")
-            raise gr.Error("Error saving results table") from e
+            raise gr.Error(f"{loc.localize('eval-tab-error-saving-results-table')} {e}") from e
 
     def download_data_table(processor_state: ProcessorState):
         if processor_state is None:
-            return None
+            raise gr.Error(loc.localize("eval-tab-error-calc-metrics-first"), print_exception=False)
         try:
-            data_df = processor_state.processor.get_sample_data()
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-            data_df.to_csv(temp_file.name, index=False)
-            temp_file.close()
-            desired_path = os.path.join(os.path.dirname(temp_file.name), "data_table.csv")
+            file_location = gu.save_file_dialog(
+                state_key="eval-data-table",
+                filetypes=("CSV (*.csv)", "TSV (*.tsv;*.TSV)"),
+                default_filename="data_table.csv",
+            )
+            if file_location:
+                data_df = processor_state.processor.get_sample_data()
 
-            if os.path.exists(desired_path):
-                os.remove(desired_path)
+                if file_location.split(".")[-1].lower() == "tsv":
+                    data_df.to_csv(file_location, sep="\t", index=False)
+                else:
+                    data_df.to_csv(file_location, index=False)
 
-            os.rename(temp_file.name, desired_path)
-
-            return gr.update(value=desired_path)
+                gr.Info(loc.localize("eval-tab-info-data-table-saved"))
         except Exception as e:
-            raise gr.Error("Error saving data table") from e
+            raise gr.Error(f"{loc.localize('eval-tab-error-saving-data-table')} {e}") from e
 
     def get_columns_from_uploaded_files(files):
         columns = set()
@@ -112,7 +132,7 @@ def build_evaluation_tab():
                     columns.update(df.columns)
                 except Exception as e:
                     print(f"Error reading file {file_obj}: {e}")
-                    raise gr.Error(f"Error reading file {file_obj}") from e
+                    gr.Warning(f"{loc.localize('eval-tab-warning-error-reading-file')} {file_obj}")
 
         return sorted(list(columns))
 
@@ -221,11 +241,15 @@ def build_evaluation_tab():
             return avail_classes, avail_recordings, proc, annotation_dir, prediction_dir
         except KeyError as e:
             print(f"Column missing in files: {e}")
-            raise gr.Error("Column missing in files: " + str(e) + ". Please check the column names.") from e
+            raise gr.Error(
+                f"{loc.localize('eval-tab-error-missing-col')}: "
+                + str(e)
+                + f". {loc.localize('eval-tab-error-missing-col-info')}"
+            ) from e
         except Exception as e:
             print(f"Error initializing processor: {e}")
 
-            raise gr.Error(loc.localize("eval-tab-selections-dataframe-error-message") + str(e)) from e
+            raise gr.Error(f"{loc.localize('eval-tab-error-init-processor')}:" + str(e)) from e
 
     # update_selections is triggered when files or mapping file change.
     # It creates the temporary directories once and stores them along with the processor.
@@ -304,24 +328,11 @@ def build_evaluation_tab():
             state,
         )
 
-    with gr.Tab("Evaluation"):
+    with gr.Tab(loc.localize("eval-tab-title")):
         # Custom CSS to match the layout style of other files and remove gray backgrounds.
         gr.Markdown(
             """
             <style>
-            //body { background-color: #fff; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
-            // .gradio-container {
-            //     border: 1px solid #ccc;
-            //     border-radius: 8px;
-            //     padding: 16px;
-            //     background-color: transparent;
-            // }
-            /* Override any group styles */
-            //.gradio-group {
-            //    background-color: transparent !important;
-            //    border: none !important;
-            //    box-shadow: none !important;
-            //}
             /* Grid layout for checkbox groups */
             .custom-checkbox-group {
                 display: grid;
@@ -380,7 +391,7 @@ def build_evaluation_tab():
                     files_to_display = files[:100] + [["..."]] if len(files) > 100 else files
                     return [files, files_to_display, gr.update(visible=True)] + on_select(files)
 
-                return ["", [[loc.localize("eval-tab-selections-dataframe-no-files-found")]]]
+                return ["", [[loc.localize("eval-tab-no-files-found")]]]
 
             return select_directory_on_empty
 
@@ -390,7 +401,7 @@ def build_evaluation_tab():
                 annotation_directory_input = gr.Matrix(
                     interactive=False,
                     headers=[
-                        loc.localize("eval-tab-selections-dataframe-column-subpath-header"),
+                        loc.localize("eval-tab-selections-column-file-header"),
                     ],
                 )
 
@@ -399,49 +410,53 @@ def build_evaluation_tab():
                 prediction_directory_input = gr.Matrix(
                     interactive=False,
                     headers=[
-                        loc.localize("eval-tab-selections-dataframe-column-subpath-header"),
+                        loc.localize("eval-tab-selections-column-file-header"),
                     ],
                 )
 
         # ----------------------- Annotations Columns Box -----------------------
         with gr.Group(visible=False) as annotation_group:
-            with gr.Accordion("Annotations Columns", open=True):
+            with gr.Accordion(loc.localize("eval-tab-annotation-col-accordion-label"), open=True):
                 with gr.Row():
                     annotation_columns: dict[str, gr.Dropdown] = {}
 
-                    for label_text in ["Start Time", "End Time", "Class", "Recording", "Duration"]:
-                        annotation_columns[label_text] = gr.Dropdown(choices=[], label=label_text)
+                    for col in ["Start Time", "End Time", "Class", "Recording", "Duration"]:
+                        annotation_columns[col] = gr.Dropdown(choices=[], label=localized_column_labels[col])
 
         # ----------------------- Predictions Columns Box -----------------------
         with gr.Group(visible=False) as prediction_group:
-            with gr.Accordion("Predictions Columns", open=True):
+            with gr.Accordion(loc.localize("eval-tab-prediction-col-accordion-label"), open=True):
                 with gr.Row():
                     prediction_columns: dict[str, gr.Dropdown] = {}
 
-                    for label_text in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]:
-                        prediction_columns[label_text] = gr.Dropdown(choices=[], label=label_text)
+                    for col in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]:
+                        prediction_columns[col] = gr.Dropdown(choices=[], label=localized_column_labels[col])
 
         # ----------------------- Class Mapping Box -----------------------
         with gr.Group(visible=False) as mapping_group:
-            with gr.Accordion("Class Mapping (Optional)", open=False):
+            with gr.Accordion(loc.localize("eval-tab-class-mapping-accordion-label"), open=False):
                 with gr.Row():
-                    mapping_file = gr.File(label="Upload Mapping File", file_count="single", file_types=[".json"])
-                    download_mapping_button = gr.DownloadButton(label="Download Template")
+                    mapping_file = gr.File(
+                        label=loc.localize("eval-tab-upload-mapping-file-label"),
+                        file_count="single",
+                        file_types=[".json"],
+                    )
+                    download_mapping_button = gr.DownloadButton(
+                        label=loc.localize("eval-tab-mapping-file-template-download-button-label")
+                    )
 
-            download_mapping_button.click(
-                fn=download_class_mapping_template, inputs=[], outputs=download_mapping_button
-            )
+            download_mapping_button.click(fn=download_class_mapping_template)
 
         # ----------------------- Classes and Recordings Selection Box -----------------------
         with gr.Group(visible=False) as class_recording_group:
-            with gr.Accordion("Select Classes and Recordings", open=False):
+            with gr.Accordion(loc.localize("eval-tab-select-classes-recordings-accordion-label"), open=False):
                 with gr.Row():
                     with gr.Column():
                         select_classes_checkboxgroup = gr.CheckboxGroup(
                             choices=[],
                             value=[],
-                            label="Select Classes",
-                            info="Select the classes to calculate the metrics.",
+                            label=loc.localize("eval-tab-select-classes-checkboxgroup-label"),
+                            info=loc.localize("eval-tab-select-classes-checkboxgroup-info"),
                             interactive=True,
                             elem_classes="custom-checkbox-group",
                         )
@@ -450,51 +465,56 @@ def build_evaluation_tab():
                         select_recordings_checkboxgroup = gr.CheckboxGroup(
                             choices=[],
                             value=[],
-                            label="Select Recordings",
-                            info="Select the recordings to calculate the metrics.",
+                            label=loc.localize("eval-tab-select-recordings-checkboxgroup-label"),
+                            info=loc.localize("eval-tab-select-recordings-checkboxgroup-info"),
                             interactive=True,
                             elem_classes="custom-checkbox-group",
                         )
 
         # ----------------------- Parameters Box -----------------------
         with gr.Group():
-            with gr.Accordion("Parameters", open=False):
+            with gr.Accordion(loc.localize("eval-tab-parameters-accordion-label"), open=False):
                 with gr.Row():
                     sample_duration = gr.Number(
-                        value=3, label="Sample Duration (s)", precision=0, info="Audio sample length (in seconds)."
+                        value=3,
+                        label=loc.localize("eval-tab-sample-duration-number-label"),
+                        precision=0,
+                        info=loc.localize("eval-tab-sample-duration-number-info"),
                     )
                     recording_duration = gr.Textbox(
-                        label="Recording Duration (s)",
-                        placeholder="Determined from files",
-                        info="Inferred from the data if not specified.",
+                        label=loc.localize("eval-tab-recording-duration-textbox-label"),
+                        placeholder=loc.localize("eval-tab-recording-duration-textbox-placeholder"),
+                        info=loc.localize("eval-tab-recording-duration-textbox-info"),
                     )
                     min_overlap = gr.Number(
                         value=0.5,
-                        label="Minimum Overlap (s)",
-                        info="Overlap needed to assign an annotation to a sample.",
+                        label=loc.localize("eval-tab-min-overlap-number-label"),
+                        info=loc.localize("eval-tab-min-overlap-number-info"),
                     )
                     threshold = gr.Slider(
                         minimum=0.01,
                         maximum=0.99,
                         value=0.1,
-                        label="Threshold",
-                        info="Threshold for classifying a prediction as positive.",
+                        label=loc.localize("eval-tab-threshold-number-label"),
+                        info=loc.localize("eval-tab-threshold-number-info"),
                     )
                     class_wise = gr.Checkbox(
-                        label="Class-wise Metrics", value=False, info="Calculate metrics separately for each class."
+                        label=loc.localize("eval-tab-classwise-checkbox-label"),
+                        value=False,
+                        info=loc.localize("eval-tab-classwise-checkbox-info"),
                     )
 
         # ----------------------- Metrics Box -----------------------
         with gr.Group():
-            with gr.Accordion("Select Metrics", open=False):
+            with gr.Accordion(loc.localize("eval-tab-metrics-accordian-label"), open=False):
                 with gr.Row():
                     metric_info = {
-                        "AUROC": "AUROC measures the likelihood that the model ranks a random positive case higher than a random negative case.",
-                        "Precision": "Precision measures how often the model's positive predictions are actually correct.",
-                        "Recall": "Recall measures the percentage of actual positive cases correctly identified by the model for each class.",
-                        "F1 Score": "The F1 score is the harmonic mean of precision and recall, balancing both metrics.",
-                        "Average Precision (AP)": "Average Precision summarizes the precision-recall curve by averaging precision across all recall levels.",
-                        "Accuracy": "Accuracy measures the percentage of correct predictions made by the model.",
+                        "AUROC": loc.localize("eval-tab-auroc-checkbox-info"),
+                        "Precision": loc.localize("eval-tab-precision-checkbox-info"),
+                        "Recall": loc.localize("eval-tab-recall-checkbox-info"),
+                        "F1 Score": loc.localize("eval-tab-f1-score-checkbox-info"),
+                        "Average Precision (AP)": loc.localize("eval-tab-ap-checkbox-info"),
+                        "Accuracy": loc.localize("eval-tab-accuracy-checkbox-info"),
                     }
                     metrics_checkboxes = {}
 
@@ -503,30 +523,28 @@ def build_evaluation_tab():
                             label=metric_name, value=True, info=description
                         )
 
-        # ----------------------- Actions Box -----------------------
-        with gr.Row():
-            calculate_button = gr.Button("Calculate Metrics", variant="huggingface")
-            plot_metrics_button = gr.Button("Plot Metrics", variant="huggingface")
-            plot_confusion_button = gr.Button("Plot Confusion Matrix", variant="huggingface")
-            plot_metrics_all_thresholds_button = gr.Button("Plot Metrics All Thresholds", variant="huggingface")
+            # ----------------------- Actions Box -----------------------
 
-        with gr.Row():
-            download_results_button = gr.DownloadButton(
-                label="Download Results Table", visible=True, variant="huggingface"
-            )
-            download_data_button = gr.DownloadButton(label="Download Data Table", visible=True, variant="huggingface")
+        calculate_button = gr.Button(loc.localize("eval-tab-calculate-metrics-button-label"), variant="huggingface")
+
+        with gr.Column(visible=False) as action_col:
+            with gr.Row():
+                plot_metrics_button = gr.Button(loc.localize("eval-tab-plot-metrics-button-label"))
+                plot_confusion_button = gr.Button(loc.localize("eval-tab-plot-confusion-matrix-button-label"))
+                plot_metrics_all_thresholds_button = gr.Button(
+                    loc.localize("eval-tab-plot-metrics-all-thresholds-button-label")
+                )
+
+            with gr.Row():
+                download_results_button = gr.DownloadButton(loc.localize("eval-tab-result-table-download-button-label"))
+                download_data_button = gr.DownloadButton(loc.localize("eval-tab-data-table-download-button-label"))
 
         download_results_button.click(
             fn=download_results_table,
             inputs=[pa_state, predictions_state, labels_state, class_wise],
-            outputs=download_results_button,
         )
-        download_data_button.click(fn=download_data_table, inputs=[processor_state], outputs=download_data_button)
-        metric_table = gr.Dataframe(
-            show_label=False,
-            type="pandas",
-            visible=False,
-        )
+        download_data_button.click(fn=download_data_table, inputs=[processor_state])
+        metric_table = gr.Dataframe(show_label=False, type="pandas", visible=False, interactive=False)
         plot_output = gr.Plot(visible=False, show_label=False)
 
         # Update available selections (classes and recordings) and the processor state when files or mapping file change.
@@ -608,7 +626,7 @@ def build_evaluation_tab():
                 selected_classes_list = list(proc_state.processor.classes)
 
             if not selected_classes_list:
-                raise gr.Error("Error: At least one class must be selected.")
+                raise gr.Error(loc.localize("eval-tab-error-no-class-selected"))
 
             if recording_duration_value.strip() == "":
                 rec_dur = None
@@ -616,7 +634,7 @@ def build_evaluation_tab():
                 try:
                     rec_dur = float(recording_duration_value)
                 except ValueError as e:
-                    raise gr.Error("Error: Please enter a valid number for Recording Duration.") from e
+                    raise gr.Error(loc.localize("eval-tab-error-no-valid-recording-duration")) from e
 
             if mapping_file_obj and hasattr(mapping_file_obj, "temp_files"):
                 mapping_path = list(mapping_file_obj.temp_files)[0]
@@ -657,6 +675,7 @@ def build_evaluation_tab():
 
                 return (
                     gr.update(value=table, visible=True),
+                    gr.update(visible=True),
                     pa,
                     preds,
                     labs,
@@ -666,7 +685,7 @@ def build_evaluation_tab():
                 )
             except Exception as e:
                 print("Error processing data:", e)
-                raise gr.Error("Error processing data.") from e
+                raise gr.Error(f"{loc.localize('eval-tab-error-during-processing')}: {e}") from e
 
         # Updated calculate_button click now passes the selected classes and recordings.
         calculate_button.click(
@@ -696,6 +715,7 @@ def build_evaluation_tab():
             + [checkbox for checkbox in metrics_checkboxes.values()],
             outputs=[
                 metric_table,
+                action_col,
                 pa_state,
                 predictions_state,
                 labels_state,
@@ -707,36 +727,36 @@ def build_evaluation_tab():
 
         def plot_metrics(pa: PerformanceAssessor, predictions, labels, class_wise_value):
             if pa is None or predictions is None or labels is None:
-                raise gr.Error("Please calculate metrics first.", print_exception=False)
+                raise gr.Error(loc.localize("eval-tab-error-calc-metrics-first"), print_exception=False)
             try:
                 fig = pa.plot_metrics(predictions, labels, per_class_metrics=class_wise_value)
                 plt.close(fig)
 
-                return fig, gr.update(visible=True)
+                return gr.update(visible=True, value=fig)
             except Exception as e:
-                raise gr.Error(f"Error plotting metrics: {e}") from e
+                raise gr.Error(f"{loc.localize('eval-tab-error-plotting-metrics')}: {e}") from e
 
         plot_metrics_button.click(
             plot_metrics,
             inputs=[pa_state, predictions_state, labels_state, class_wise],
-            outputs=[plot_output, plot_output],
+            outputs=[plot_output],
         )
 
         def plot_confusion_matrix(pa: PerformanceAssessor, predictions, labels):
             if pa is None or predictions is None or labels is None:
-                raise gr.Error("Please calculate metrics first.", print_exception=False)
+                raise gr.Error(loc.localize("eval-tab-error-calc-metrics-first"), print_exception=False)
             try:
                 fig = pa.plot_confusion_matrix(predictions, labels)
                 plt.close(fig)
 
-                return fig, gr.update(visible=True)
+                return gr.update(visible=True, value=fig)
             except Exception as e:
-                raise gr.Error(f"Error plotting confusion matrix: {e}") from e
+                raise gr.Error(f"{loc.localize('eval-tab-error-plotting-confusion-matrix')}: {e}") from e
 
         plot_confusion_button.click(
             plot_confusion_matrix,
             inputs=[pa_state, predictions_state, labels_state],
-            outputs=[plot_output, plot_output],
+            outputs=[plot_output],
         )
 
         annotation_select_directory_btn.click(
@@ -773,19 +793,19 @@ def build_evaluation_tab():
 
         def plot_metrics_all_thresholds(pa: PerformanceAssessor, predictions, labels, class_wise_value):
             if pa is None or predictions is None or labels is None:
-                raise gr.Error("Please calculate metrics first.", print_exception=False)
+                raise gr.Error(loc.localize("eval-tab-error-calc-metrics-first"), print_exception=False)
             try:
                 fig = pa.plot_metrics_all_thresholds(predictions, labels, per_class_metrics=class_wise_value)
                 plt.close(fig)
 
-                return fig, gr.update(visible=True)
+                return gr.update(visible=True, value=fig)
             except Exception as e:
-                raise gr.Error(f"Error plotting metrics for all thresholds: {e}") from e
+                raise gr.Error(f"{loc.localize('eval-tab-error-plotting-metrics-all-thresholds')}: {e}") from e
 
         plot_metrics_all_thresholds_button.click(
             plot_metrics_all_thresholds,
             inputs=[pa_state, predictions_state, labels_state, class_wise],
-            outputs=[plot_output, plot_output],
+            outputs=[plot_output],
         )
 
 

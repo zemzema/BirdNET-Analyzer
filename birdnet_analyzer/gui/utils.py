@@ -63,14 +63,16 @@ def gui_runtime_error_handler(f: callable):
     Raises:
         gr.Error: If an exception is raised during the execution of `f`.
     """
+
     def wrapper(*args, **kwargs):
         try:
             return f(*args, **kwargs)
         except Exception as e:
             utils.write_error_log(e)
             raise gr.Error(message=str(e), duration=None) from e
-    
+
     return wrapper
+
 
 # Nishant - Following two functions (select_folder and get_files_and_durations) are written for Folder selection
 def select_folder(state_key=None):
@@ -245,7 +247,10 @@ def build_settings():
 
             with gr.Row():
                 theme_radio = gr.Radio(
-                    [(loc.localize("settings-tab-theme-dropdown-dark-option"),"dark"), (loc.localize("settings-tab-theme-dropdown-light-option"), "light")],
+                    [
+                        (loc.localize("settings-tab-theme-dropdown-dark-option"), "dark"),
+                        (loc.localize("settings-tab-theme-dropdown-light-option"), "light"),
+                    ],
                     value=lambda: settings.theme(),
                     label=loc.localize("settings-tab-theme-dropdown-label"),
                     info="⚠️" + loc.localize("settings-tab-theme-dropdown-info"),
@@ -488,6 +493,29 @@ def species_list_coordinates(show_map=False):
     yearlong_checkbox.change(on_change, inputs=yearlong_checkbox, outputs=week_number, show_progress=False)
 
     return lat_number, lon_number, week_number, sf_thresh_number, yearlong_checkbox, map_plot
+
+
+def save_file_dialog(filetypes=(), state_key=None, default_filename=""):
+    """Creates a file save dialog.
+
+    Args:
+        filetypes: List of filetypes to be filtered in the dialog.
+
+    Returns:
+        The selected file or None of the dialog was canceled.
+    """
+    initial_selection = settings.get_state(state_key, "") if state_key else ""
+    file = _WINDOW.create_file_dialog(
+        webview.SAVE_DIALOG, file_types=filetypes, directory=initial_selection, save_filename=default_filename
+    )
+
+    if file:
+        if state_key:
+            settings.set_state(state_key, file)
+
+        return file
+
+    return None
 
 
 def select_file(filetypes=(), state_key=None):
