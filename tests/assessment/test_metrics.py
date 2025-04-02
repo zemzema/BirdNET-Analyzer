@@ -1,5 +1,5 @@
 import pytest
-import numpy as
+import numpy as np
 
 from birdnet_analyzer.evaluation.assessment.metrics import (
     calculate_accuracy,
