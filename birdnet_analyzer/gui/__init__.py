@@ -8,6 +8,7 @@ def main():
     import birdnet_analyzer.gui.utils as gu
     import birdnet_analyzer.gui.embeddings as embeddings
     import birdnet_analyzer.gui.evaluation as evaluation
+    import birdnet_analyzer.gui.visualization as visualization
 
     gu.open_window(
         [
@@ -19,5 +20,6 @@ def main():
             species.build_species_tab,
             embeddings.build_embeddings_tab,
             evaluation.build_evaluation_tab,
+            visualization.build_visualization_tab,
         ]
     )

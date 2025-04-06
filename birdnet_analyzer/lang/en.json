@@ -316,5 +316,6 @@
     "validation-no-valid-frequency": "Please enter a valid frequency in",
     "validation-no-valid-learning-rate": "Please enter a valid learning rate.",
     "validation-non-event-samples-required-in-binary-classification": "Non-event samples are required for binary classification",
-    "validation-only-repeat-upsampling-for-multi-label": "Only repeat-upsampling is available for multi-label"
+    "validation-only-repeat-upsampling-for-multi-label": "Only repeat-upsampling is available for multi-label",
+    "visualization-tab-title": "Visualization"
 }
