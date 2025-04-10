@@ -176,13 +176,15 @@ def list_subdirectories(path: str):
     return filter(lambda el: os.path.isdir(os.path.join(path, el)), os.listdir(path))
 
 
-def save_to_cache(cache_file: str, x_train, y_train, labels: list[str]):
+def save_to_cache(cache_file: str, x_train, y_train, x_test, y_test, labels: list[str]):
     """Saves the training data to a cache file.
 
     Args:
         cache_file: The path to the cache file.
         x_train: The training samples.
         y_train: The training labels.
+        x_test: The test samples.
+        y_test: The test labels.
         labels: The list of labels.
     """
     import numpy as np
@@ -195,6 +197,8 @@ def save_to_cache(cache_file: str, x_train, y_train, labels: list[str]):
         cache_file,
         x_train=x_train,
         y_train=y_train,
+        x_test=x_test,
+        y_test=y_test,
         labels=labels,
         binary_classification=cfg.BINARY_CLASSIFICATION,
         multi_label=cfg.MULTI_LABEL,
@@ -208,7 +212,7 @@ def load_from_cache(cache_file: str):
         cache_file: The path to the cache file.
 
     Returns:
-        A tuple of (x_train, y_train, labels).
+        A tuple of (x_train, y_train, x_test, y_test, labels, binary_classification, multi_label).
 
     """
     import numpy as np
@@ -219,11 +223,13 @@ def load_from_cache(cache_file: str):
     # Get data
     x_train = cache["x_train"]
     y_train = cache["y_train"]
+    x_test = cache.get("x_test", np.array([]))
+    y_test = cache.get("y_test", np.array([]))
     labels = cache["labels"]
-    binary_classification = bool(cache["binary_classification"]) if "binary_classification" in cache.keys() else False
-    multi_label = bool(cache["multi_label"]) if "multi_label" in cache.keys() else False
+    binary_classification = bool(cache.get("binary_classification", False))
+    multi_label = bool(cache.get("multi_label", False))
 
-    return x_train, y_train, labels, binary_classification, multi_label
+    return x_train, y_train, x_test, y_test, labels, binary_classification, multi_label
 
 
 def clear_error_log():

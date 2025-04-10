@@ -600,7 +600,10 @@ def train_parser():
         "input",
         metavar="INPUT",
         help="Path to training data folder. Subfolder names are used as labels.",
-    )
+    )    
+    parser.add_argument(
+        "--test_data", 
+        help="Path to test data folder. If not specified, a validation split will be used.")
     parser.add_argument(
         "--crop_mode",
         default=cfg.SAMPLE_CROP_MODE,
@@ -618,7 +621,7 @@ def train_parser():
         "--val_split",
         type=float,
         default=cfg.TRAIN_VAL_SPLIT,
-        help="Validation split ratio.",
+        help="Validation split ratio. Will be ignored if test_data is set.",
     )
     parser.add_argument(
         "--learning_rate",
