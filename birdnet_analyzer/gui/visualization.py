@@ -23,6 +23,7 @@ class ProcessorState(typing.NamedTuple):
     processor: DataProcessor
     prediction_dir: str
     metadata_dir: str  # Add metadata directory to state
+    color_map: typing.Optional[typing.Dict[str, str]] = None  # Add color map to state
 
 
 def build_visualization_tab():
@@ -249,9 +250,7 @@ def build_visualization_tab():
         selected_classes_list,
         selected_recordings_list,
     ):
-        """
-        Uses ConfidencePlotter to plot confidence distributions for the selected classes.
-        """
+        """Uses ConfidencePlotter to plot confidence distributions for the selected classes."""
         if not proc_state or not proc_state.processor:
             raise gr.Error(loc.localize("eval-tab-error-calc-metrics-first"), print_exception=False)
 
@@ -259,11 +258,10 @@ def build_visualization_tab():
         if df.empty:
             raise gr.Error("No predictions to show.")
 
-        # Use the mapped column names
+        # Filter data first
         col_class = proc_state.processor.get_column_name("Class")
         conf_col = proc_state.processor.get_column_name("Confidence")
         
-        # Filter by classes and recordings if selected
         if selected_classes_list:
             df = df[df[col_class].isin(selected_classes_list)]
         if selected_recordings_list:
@@ -272,7 +270,6 @@ def build_visualization_tab():
         if df.empty:
             raise gr.Error("No predictions left after filtering.")
 
-        # Create ConfidencePlotter
         plotter = ConfidencePlotter(
             data=df,
             class_col=col_class,
@@ -280,12 +277,31 @@ def build_visualization_tab():
         )
 
         try:
+            # Get all classes in sorted order for consistent colors
+            all_classes = sorted(proc_state.processor.get_data()[col_class].unique())
+            
+            # Define base colors for both plots
+            base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
+            # Extend colors if needed by cycling through them
+            colors = base_colors * (1 + len(all_classes) // len(base_colors))
+            color_map = {cls: colors[i] for i, cls in enumerate(all_classes)}
+            
+            # Create the density plot using the color map
             fig_smooth = plotter.plot_smooth_distribution_plotly(
                 bandwidth=0.2,
                 title="Smooth Distribution of Confidence Scores",
-                classes=selected_classes_list
+                classes=selected_classes_list if selected_classes_list else all_classes,
+                color_map=color_map
             )
-            return gr.update(visible=True, value=fig_smooth)
+            
+            # Store color map in state
+            new_state = ProcessorState(
+                processor=proc_state.processor,
+                prediction_dir=proc_state.prediction_dir,
+                metadata_dir=proc_state.metadata_dir,
+                color_map=color_map
+            )
+            return [new_state, gr.update(visible=True, value=fig_smooth)]
         except Exception as e:
             raise gr.Error(f"Error creating plots: {str(e)}")
 
@@ -297,68 +313,122 @@ def build_visualization_tab():
         coordinate_format,
         meta_site
     ):
-        """Plot spatial distribution of sites on a map."""
-        if not proc_state or not proc_state.metadata_dir:
-            raise gr.Error("Please load metadata first")
+        """Plot spatial distribution of predictions by class."""
+        if not proc_state or not proc_state.processor:
+            raise gr.Error("Please load predictions first")
             
         try:
+            # Read metadata
             meta_files = list(Path(proc_state.metadata_dir).glob("*.csv"))
             if not meta_files:
                 raise gr.Error("No metadata files found")
                 
-            df = pd.read_csv(meta_files[0])
+            metadata_df = pd.read_csv(meta_files[0])
+            print(f"Loaded metadata with columns: {metadata_df.columns.tolist()}")
             
-            # If coordinates are in UTM format, convert them
+            # Convert coordinates if needed
             if coordinate_format == "UTM":
-                df = process_coordinates(
-                    df,
+                print("Converting UTM coordinates...")
+                metadata_df = process_coordinates(
+                    metadata_df,
                     country_col=meta_country,
                     easting_col=meta_x,
                     northing_col=meta_y
                 )
+                print(f"Converted coordinates: {len(metadata_df)} rows processed")
             else:
-                # For Lat/Long format, just rename columns
-                df['latitude'] = df[meta_y]
-                df['longitude'] = df[meta_x]
+                print("Using Lat/Long coordinates directly")
+                metadata_df['latitude'] = pd.to_numeric(metadata_df[meta_y], errors='coerce')
+                metadata_df['longitude'] = pd.to_numeric(metadata_df[meta_x], errors='coerce')
             
-            # Create map using Plotly with optimized settings
-            fig = px.scatter_mapbox(
-                df,
-                lat='latitude',
-                lon='longitude',
-                hover_data=[meta_site] if meta_site in df.columns else None,
-                zoom=10,
-                height=600,
-                mapbox_style='open-street-map',
-            )
-            
-            # Optimize layout
-            fig.update_layout(
-                margin={"r":0,"t":0,"l":0,"b":0},
-                mapbox=dict(
-                    center=dict(
-                        lat=df['latitude'].mean(),
-                        lon=df['longitude'].mean()
+            # Set metadata in processor
+            try:
+                proc_state.processor.set_metadata(
+                    metadata_df,
+                    site_col=meta_site,
+                    lat_col='latitude',
+                    lon_col='longitude'
+                )
+            except Exception as e:
+                print(f"Error setting metadata: {e}")
+                raise gr.Error(f"Error setting metadata: {str(e)}")
+
+            try:
+                # Get aggregated prediction data
+                agg_df = proc_state.processor.get_aggregated_locations()
+                
+                if agg_df.empty:
+                    raise gr.Error("No predictions with valid locations found")
+
+                class_col = proc_state.processor.get_column_name("Class")
+                
+                # Ensure we have a color map
+                if not proc_state.color_map:
+                    # Create the same color mapping as in plot_predictions_action
+                    all_classes = sorted(proc_state.processor.get_data()[class_col].unique())
+                    base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
+                    colors = base_colors * (1 + len(all_classes) // len(base_colors))
+                    color_map = {cls: colors[i] for i, cls in enumerate(all_classes)}
+                else:
+                    color_map = proc_state.color_map
+
+                # Sort classes for consistent order
+                sorted_classes = sorted(agg_df[class_col].unique())
+
+                # Create map using Plotly
+                fig = px.scatter_mapbox(
+                    agg_df,
+                    lat='latitude',
+                    lon='longitude',
+                    size='count',
+                    color=class_col,
+                    category_orders={class_col: sorted_classes},
+                    color_discrete_map=color_map,
+                    hover_data=['site_name', 'count'],
+                    size_max=50,  # Increased from 50 to 100
+                    zoom=10,
+                    height=600,
+                    title="Spatial Distribution of Predictions by Class"
+                )
+
+                # Update traces for more distinctive size differences
+                max_count = max(agg_df['count'])
+                min_count = min(agg_df['count'])
+                size_scale = 50  # Maximum marker size
+                
+                # Calculate size reference for better scaling
+                sizeref = 2.0 * max_count / (size_scale**2)
+                
+                fig.update_traces(
+                    marker=dict(
+                        sizemin=3,  # Minimum marker size
+                        sizemode='area',
+                        sizeref=sizeref,  # Adjusted size reference
+                        opacity=0.8
                     )
-                ),
-                uirevision=True  # Keeps the view state stable
-            )
-            
-            # Optimize markers and include site name in hover text
-            hover_template = (
-                f'Site: %{{customdata[0]}}<br>'  # Show site name from metadata
-                'Lat: %{lat:.4f}<br>'
-                'Lon: %{lon:.4f}'
-                '<extra></extra>'
-            )
-            
-            fig.update_traces(
-                marker=dict(size=8),
-                customdata=df[[meta_site]],  # Pass site column instead of country
-                hovertemplate=hover_template
-            )
-            
-            return gr.update(value=fig, visible=True)
+                )
+                
+                # Update layout
+                fig.update_layout(
+                    mapbox_style='open-street-map',
+                    margin={"r":0,"t":30,"l":0,"b":0},
+                    legend_title="Species",
+                    showlegend=True,
+                    mapbox=dict(
+                        center=dict(
+                            lat=agg_df['latitude'].mean(),
+                            lon=agg_df['longitude'].mean()
+                        ),
+                        zoom=10  # Set a default zoom level that shows more context
+                    )
+                )
+                
+                return gr.update(value=fig, visible=True)
+                
+            except ValueError as ve:
+                print(f"Error in data processing: {ve}")
+                raise gr.Error(f"Error processing data: {str(ve)}")
+                
         except Exception as e:
             print(f"Error in plot_spatial_distribution: {str(e)}")
             raise gr.Error(f"Error creating map: {str(e)}")
@@ -536,7 +606,7 @@ def build_visualization_tab():
         plot_predictions_btn.click(
             fn=plot_predictions_action,
             inputs=[processor_state, select_classes_checkboxgroup, select_recordings_checkboxgroup],
-            outputs=[smooth_distribution_output],
+            outputs=[processor_state, smooth_distribution_output],  # Add processor_state to outputs
         )
 
         # Add click handler for map button

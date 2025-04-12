@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import gaussian_kde
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 
 class ConfidencePlotter:
@@ -181,49 +181,62 @@ class ConfidencePlotter:
         fig.show()
         return fig
 
-    def plot_smooth_distribution_plotly(self, bandwidth=0.2, title="Smooth Distribution of Confidence Scores", classes: Optional[List[str]] = None):
+    def plot_smooth_distribution_plotly(
+        self,
+        bandwidth: float = 0.2,
+        title: str = "Smooth Distribution of Confidence Scores",
+        classes: List[str] = None,
+        color_map: Dict[str, str] = None
+    ) -> go.Figure:
         """
-        Creates a smooth (Kernel Density Estimate) distribution plot using Plotly.
+        Creates a smooth distribution plot using plotly.
 
         Args:
-            bandwidth (float): Bandwidth for the KDE smoothing.
-            title (str): Title for the Plotly figure.
-            classes (Optional[List[str]]): List of classes to include in the plot. If None, all classes are included.
-
-        Returns:
-            plotly.graph_objects.Figure: The resulting Plotly figure.
+            bandwidth: Width of the smoothing window
+            title: Plot title
+            classes: List of classes to plot (defaults to all)
+            color_map: Dict mapping class names to colors
         """
+        if not classes:
+            classes = sorted(self.data[self.class_col].unique())
+            
         fig = go.Figure()
-        if classes is None:
-            classes = list(self.data[self.class_col].dropna().unique())
-        colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
-        dash_patterns = ['solid', 'dash', 'dot', 'dashdot', 'longdash', 'longdashdot']  # different line dash styles
-        for idx, cls in enumerate(classes):
-            data_subset = self.data[self.data[self.class_col] == cls][self.conf_col].dropna().to_numpy()
-            if len(data_subset) < 2:
+        dash_patterns = ['solid', 'dash', 'dot', 'dashdot', 'longdash', 'longdashdot']
+
+        for i, class_name in enumerate(classes):
+            class_data = self.data[self.data[self.class_col] == class_name][self.conf_col].dropna()
+            if len(class_data) < 2:
                 continue
-            kde = gaussian_kde(data_subset, bw_method=bandwidth)
-            xs = np.linspace(data_subset.min(), data_subset.max(), 200)
-            ys = kde(xs)
-            fig.add_trace(go.Scatter(
-                x=xs,
-                y=ys,
-                mode="lines",
-                fill="tozeroy",
-                name=str(cls),
-                line=dict(
-                    color=colors[idx % len(colors)],
-                    dash=dash_patterns[idx % len(dash_patterns)]
+                
+            kde = gaussian_kde(class_data, bw_method=bandwidth)
+            x_range = np.linspace(class_data.min(), class_data.max(), 200)
+            y_values = kde(x_range)
+            
+            color = color_map.get(class_name) if color_map else None
+            fig.add_trace(
+                go.Scatter(
+                    x=x_range,
+                    y=y_values,
+                    mode="lines",
+                    fill="tozeroy",
+                    name=str(class_name),
+                    line=dict(
+                        color=color,
+                        dash=dash_patterns[i % len(dash_patterns)]
+                    )
                 )
-            ))
+            )
+
         if len(fig.data) == 0:
             raise ValueError("Not enough data points for any of the selected classes.")
+
         fig.update_layout(
             title=title,
-            xaxis_title=self.conf_col,
-            yaxis_title="Estimated Density",  # updated label
+            xaxis_title="Confidence Score",
+            yaxis_title="Estimated Density",
             legend_title="Class",
             legend=dict(x=1.02, y=1),
-            margin=dict(r=150)  # add right margin so that the menu and legend don't overlap
+            margin=dict(r=150)  # add right margin for legend
         )
+        
         return fig
