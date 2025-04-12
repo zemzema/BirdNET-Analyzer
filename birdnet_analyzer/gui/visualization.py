@@ -4,21 +4,25 @@ import shutil
 import tempfile
 import typing
 import io
+from pathlib import Path  # Add this import
 
 import gradio as gr
 import matplotlib.pyplot as plt
 import pandas as pd
+import plotly.express as px  # Add this import
 
 import birdnet_analyzer.gui.localization as loc
 import birdnet_analyzer.gui.utils as gu
 from birdnet_analyzer.visualization.data_processor import DataProcessor
 from birdnet_analyzer.visualization.plotting.confidences import ConfidencePlotter
+from birdnet_analyzer.visualization.utils.coordinates import process_coordinates
 
 
 class ProcessorState(typing.NamedTuple):
     """State of the DataProcessor."""
     processor: DataProcessor
     prediction_dir: str
+    metadata_dir: str  # Add metadata directory to state
 
 
 def build_visualization_tab():
@@ -38,6 +42,14 @@ def build_visualization_tab():
         "Confidence": "Confidence",
     }
 
+    # Default columns for metadata
+    metadata_default_columns = {
+        "Site": "Site",
+        "Country": "country", #"Country",
+        "X": "N", #"Longitude",  # Changed from separate Longitude/Easting
+        "Y": "W", #"Latitude",   # Changed from separate Latitude/Northing
+    }
+
     localized_column_labels = {
         "Start Time": loc.localize("eval-tab-column-start-time-label"),
         "End Time": loc.localize("eval-tab-column-end-time-label"),
@@ -45,6 +57,10 @@ def build_visualization_tab():
         "Recording": loc.localize("eval-tab-column-recording-label"),
         "Duration": loc.localize("eval-tab-column-duration-label"),
         "Confidence": loc.localize("eval-tab-column-confidence-label"),
+        "Site": loc.localize("viz-tab-column-site-label"),
+        "Country": loc.localize("viz-tab-column-country-label"),
+        "X": loc.localize("viz-tab-column-x-label"),  # Will show as "Longitude/Easting"
+        "Y": loc.localize("viz-tab-column-y-label"),  # Will show as "Latitude/Northing"
     }
 
     def get_columns_from_uploaded_files(files):
@@ -145,14 +161,48 @@ def build_visualization_tab():
             updates.append(gr.update(choices=cols, value=val))
         return updates
 
+    def update_metadata_columns(uploaded_files):
+        """
+        Called when user selects metadata files. Reads headers and updates dropdowns.
+        """
+        cols = set()
+        if uploaded_files:
+            for file_obj in uploaded_files:
+                try:
+                    # Try reading with CSV engine first
+                    df = pd.read_csv(file_obj, nrows=0)
+                    cols.update(df.columns)
+                except Exception:
+                    try:
+                        # Fallback to python engine with automatic delimiter detection
+                        df = pd.read_csv(file_obj, sep=None, engine="python", nrows=0)
+                        cols.update(df.columns)
+                    except Exception as e:
+                        print(f"Error reading file {file_obj}: {e}")
+                        gr.Warning(f"{loc.localize('eval-tab-warning-error-reading-file')} {file_obj}")
+        
+        cols = [""] + sorted(list(cols))
+        updates = []
+        for label in ["Site", "Country", "X", "Y"]:
+            default_val = metadata_default_columns.get(label)
+            val = default_val if default_val in cols else None
+            updates.append(gr.update(choices=cols, value=val))
+        return updates
+
     def update_selections(
         prediction_files,
+        metadata_files,  # New parameter
         pred_start_time,
         pred_end_time,
         pred_class,
         pred_confidence,
         pred_recording,
         pred_duration,
+        meta_site,  # New parameter
+        meta_country,  # New parameter
+        meta_x,  # Changed from separate easting/longitude
+        meta_y,  # Changed from separate northing/latitude
+        coordinate_format,  # New parameter
         current_classes,
         current_recordings,
     ):
@@ -161,6 +211,8 @@ def build_visualization_tab():
         Preserves any selected classes/recordings that remain valid.
         """
         prediction_dir = save_uploaded_files(prediction_files)
+        metadata_dir = save_uploaded_files(metadata_files)  # Save metadata files
+        
         avail_classes, avail_recordings, proc, prediction_dir = initialize_processor(
             prediction_files,
             pred_start_time,
@@ -171,7 +223,8 @@ def build_visualization_tab():
             pred_duration,
             prediction_dir,
         )
-        state = ProcessorState(proc, prediction_dir) if proc else None
+        
+        state = ProcessorState(proc, prediction_dir, metadata_dir) if proc else None
 
         # Preserve valid selections or default to all available
         new_classes = (
@@ -236,6 +289,88 @@ def build_visualization_tab():
         except Exception as e:
             raise gr.Error(f"Error creating plots: {str(e)}")
 
+    def plot_spatial_distribution(
+        proc_state: ProcessorState,
+        meta_country,
+        meta_x,
+        meta_y,
+        coordinate_format,
+        meta_site
+    ):
+        """Plot spatial distribution of sites on a map."""
+        if not proc_state or not proc_state.metadata_dir:
+            raise gr.Error("Please load metadata first")
+            
+        try:
+            meta_files = list(Path(proc_state.metadata_dir).glob("*.csv"))
+            if not meta_files:
+                raise gr.Error("No metadata files found")
+                
+            df = pd.read_csv(meta_files[0])
+            
+            # If coordinates are in UTM format, convert them
+            if coordinate_format == "UTM":
+                df = process_coordinates(
+                    df,
+                    country_col=meta_country,
+                    easting_col=meta_x,
+                    northing_col=meta_y
+                )
+            else:
+                # For Lat/Long format, just rename columns
+                df['latitude'] = df[meta_y]
+                df['longitude'] = df[meta_x]
+            
+            # Create map using Plotly with optimized settings
+            fig = px.scatter_mapbox(
+                df,
+                lat='latitude',
+                lon='longitude',
+                hover_data=[meta_site] if meta_site in df.columns else None,
+                zoom=10,
+                height=600,
+                mapbox_style='open-street-map',
+            )
+            
+            # Optimize layout
+            fig.update_layout(
+                margin={"r":0,"t":0,"l":0,"b":0},
+                mapbox=dict(
+                    center=dict(
+                        lat=df['latitude'].mean(),
+                        lon=df['longitude'].mean()
+                    )
+                ),
+                uirevision=True  # Keeps the view state stable
+            )
+            
+            # Optimize markers and include site name in hover text
+            hover_template = (
+                f'Site: %{{customdata[0]}}<br>'  # Show site name from metadata
+                'Lat: %{lat:.4f}<br>'
+                'Lon: %{lon:.4f}'
+                '<extra></extra>'
+            )
+            
+            fig.update_traces(
+                marker=dict(size=8),
+                customdata=df[[meta_site]],  # Pass site column instead of country
+                hovertemplate=hover_template
+            )
+            
+            return gr.update(value=fig, visible=True)
+        except Exception as e:
+            print(f"Error in plot_spatial_distribution: {str(e)}")
+            raise gr.Error(f"Error creating map: {str(e)}")
+
+    def get_selection_tables(directory):
+        """Reads prediction txt files and metadata csv files from directory."""
+        from pathlib import Path
+        directory = Path(directory)
+        # Add support for both txt and csv files
+        files = list(directory.glob("*.txt")) + list(directory.glob("*.csv"))
+        return files
+
     with gr.Tab(loc.localize("visualization-tab-title")):
         gr.Markdown(
             """
@@ -252,12 +387,19 @@ def build_visualization_tab():
         # States
         processor_state = gr.State()
         prediction_files_state = gr.State()
+        metadata_files_state = gr.State()
 
         # File Selection UI
         with gr.Row():
             with gr.Column():
                 prediction_select_directory_btn = gr.Button(loc.localize("eval-tab-prediction-selection-button-label"))
                 prediction_directory_input = gr.Matrix(
+                    interactive=False,
+                    headers=[loc.localize("eval-tab-selections-column-file-header")],
+                )
+            with gr.Column():
+                metadata_select_directory_btn = gr.Button(loc.localize("viz-tab-metadata-selection-button-label"))
+                metadata_directory_input = gr.Matrix(
                     interactive=False,
                     headers=[loc.localize("eval-tab-selections-column-file-header")],
                 )
@@ -269,6 +411,28 @@ def build_visualization_tab():
                     prediction_columns: dict[str, gr.Dropdown] = {}
                     for col in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]:
                         prediction_columns[col] = gr.Dropdown(choices=[], label=localized_column_labels[col])
+
+        # Metadata columns box
+        with gr.Group(visible=False) as metadata_group:
+            with gr.Accordion(loc.localize("viz-tab-metadata-col-accordion-label"), open=True):
+                with gr.Row():
+                    metadata_columns: dict[str, gr.Dropdown] = {}
+                    # Updated column list with merged coordinate columns
+                    for col in ["Site", "Country", "X", "Y"]:
+                        label = localized_column_labels[col]
+                        if col == "X":
+                            label += " (Longitude/Easting)"
+                        elif col == "Y":
+                            label += " (Latitude/Northing)"
+                        metadata_columns[col] = gr.Dropdown(choices=[], label=label)
+                
+                with gr.Row():
+                    coordinate_format = gr.Radio(
+                        choices=["Lat/Long", "UTM"],
+                        value="Lat/Long",
+                        label=loc.localize("viz-tab-coordinate-format-label"),
+                        info=loc.localize("viz-tab-coordinate-format-info")
+                    )
 
         # Class and Recording Selection Box (changed back to gr.Group as in evaluation tab)
         with gr.Group(visible=True) as class_recording_group:
@@ -297,13 +461,11 @@ def build_visualization_tab():
         plot_predictions_btn = gr.Button("Plot Confidence Distributions")
         smooth_distribution_output = gr.Plot(label="Smooth Confidence Distribution", visible=False)
 
-        # Interactions
-        def get_selection_tables(directory):
-            from pathlib import Path
-            directory = Path(directory)
-            return list(directory.glob("*.txt"))
+        # Add map button and output after the existing plot components
+        plot_map_btn = gr.Button("Plot Spatial Distribution")
+        map_output = gr.Plot(label="Recording Locations", visible=False)
 
-        # Folder selection
+        # Interactions
         def get_selection_func(state_key, on_select):
             def select_directory_on_empty():
                 folder = gu.select_folder(state_key=state_key)
@@ -321,18 +483,45 @@ def build_visualization_tab():
             show_progress=True,
         )
 
+        metadata_select_directory_btn.click(
+            get_selection_func("viz-metadata-dir", update_metadata_columns),
+            outputs=[
+                metadata_files_state,
+                metadata_directory_input,
+                metadata_group,
+                metadata_columns["Site"],
+                metadata_columns["Country"], 
+                metadata_columns["X"],
+                metadata_columns["Y"]
+            ],
+            show_progress=True,
+        )
+
+        # Add visibility toggle for metadata group
+        metadata_directory_input.change(
+            lambda x: gr.update(visible=bool(x)),
+            inputs=[metadata_files_state],
+            outputs=[metadata_group],
+        )
+
         # Update processor and selections when columns change
-        for comp in prediction_columns.values():
+        for comp in list(prediction_columns.values()) + list(metadata_columns.values()) + [coordinate_format]:
             comp.change(
                 fn=update_selections,
                 inputs=[
                     prediction_files_state,
+                    metadata_files_state,
                     prediction_columns["Start Time"],
                     prediction_columns["End Time"],
                     prediction_columns["Class"],
                     prediction_columns["Confidence"],
                     prediction_columns["Recording"],
                     prediction_columns["Duration"],
+                    metadata_columns["Site"],
+                    metadata_columns["Country"],
+                    metadata_columns["X"],
+                    metadata_columns["Y"],
+                    coordinate_format,
                     select_classes_checkboxgroup,
                     select_recordings_checkboxgroup,
                 ],
@@ -348,6 +537,20 @@ def build_visualization_tab():
             fn=plot_predictions_action,
             inputs=[processor_state, select_classes_checkboxgroup, select_recordings_checkboxgroup],
             outputs=[smooth_distribution_output],
+        )
+
+        # Add click handler for map button
+        plot_map_btn.click(
+            fn=plot_spatial_distribution,
+            inputs=[
+                processor_state,
+                metadata_columns["Country"],
+                metadata_columns["X"],  # Changed from separate longitude/easting
+                metadata_columns["Y"],  # Changed from separate latitude/northing
+                coordinate_format,
+                metadata_columns["Site"]
+            ],
+            outputs=[map_output]
         )
 
 
