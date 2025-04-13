@@ -4,12 +4,13 @@ import shutil
 import tempfile
 import typing
 import io
-from pathlib import Path  # Add this import
+from pathlib import Path
+import datetime
 
 import gradio as gr
 import matplotlib.pyplot as plt
 import pandas as pd
-import plotly.express as px  # Add this import
+import plotly.express as px
 
 import birdnet_analyzer.gui.localization as loc
 import birdnet_analyzer.gui.utils as gu
@@ -22,8 +23,91 @@ class ProcessorState(typing.NamedTuple):
     """State of the DataProcessor."""
     processor: DataProcessor
     prediction_dir: str
-    metadata_dir: str  # Add metadata directory to state
-    color_map: typing.Optional[typing.Dict[str, str]] = None  # Add color map to state
+    metadata_dir: str
+    color_map: typing.Optional[typing.Dict[str, str]] = None
+
+
+def get_date_range(df: pd.DataFrame) -> tuple:
+    """Get the earliest and latest dates from predictions."""
+    try:
+        if 'prediction_time' not in df.columns or df.empty:
+            return None, None
+        
+        min_date = df['prediction_time'].min()
+        max_date = df['prediction_time'].max()
+        
+        if pd.isna(min_date) or pd.isna(max_date):
+            return None, None
+            
+        # Set time to start and end of day
+        start_date = min_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = max_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        return start_date, end_date
+    except Exception:
+        return None, None
+
+
+def convert_timestamp_to_datetime(timestamp):
+    """Convert Gradio DateTime timestamp to pandas datetime."""
+    if timestamp is None:
+        return None
+    try:
+        # Convert timestamp to pandas datetime
+        return pd.to_datetime(timestamp, unit='s')
+    except:
+        return None
+
+
+def apply_datetime_filters(df, date_range_start, date_range_end, 
+                         time_start_hour, time_start_minute, 
+                         time_end_hour, time_end_minute):
+    """Apply date and time filters to DataFrame."""
+    if df.empty or 'prediction_time' not in df.columns:
+        return df
+
+    # Create a copy to avoid modifying original
+    filtered_df = df.copy()
+    
+    # Apply date range filter if dates are provided
+    if date_range_start is not None and date_range_end is not None:
+        try:
+            filtered_df = filtered_df[filtered_df['prediction_time'].notna()]
+            start_date = convert_timestamp_to_datetime(date_range_start)
+            end_date = convert_timestamp_to_datetime(date_range_end)
+            
+            if start_date and end_date:
+                # Convert to pandas datetime if needed
+                if not pd.api.types.is_datetime64_any_dtype(filtered_df['prediction_time']):
+                    filtered_df['prediction_time'] = pd.to_datetime(filtered_df['prediction_time'])
+                
+                # Fix timezone issues by using normalized dates
+                start_date = pd.Timestamp(start_date.date()) 
+                end_date = pd.Timestamp(end_date.date()) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                
+                # Filter by date range
+                filtered_df = filtered_df[filtered_df['prediction_time'].dt.normalize().between(start_date, end_date)]
+        
+        except Exception as e:
+            print(f"Date filtering error: {e}")
+            return filtered_df
+
+    # Apply time range filter if all time components are provided
+    if all(x is not None for x in [time_start_hour, time_start_minute, time_end_hour, time_end_minute]):
+        try:
+            # Convert times to datetime.time objects
+            start_time = datetime.time(int(time_start_hour), int(time_start_minute), 0, 0)
+            end_time = datetime.time(int(time_end_hour), int(time_end_minute), 59, 999999)
+            
+            # Filter by time of day if prediction_time is datetime
+            if pd.api.types.is_datetime64_any_dtype(filtered_df['prediction_time']):
+                filtered_df = filtered_df[filtered_df['prediction_time'].dt.time.between(start_time, end_time)]
+                
+        except Exception as e:
+            print(f"Time filtering error: {e}")
+            return filtered_df
+
+    return filtered_df
 
 
 def build_visualization_tab():
@@ -39,16 +123,15 @@ def build_visualization_tab():
         "End Time": "End Time (s)",
         "Class": "Common Name",
         "Recording": "Begin File",
-        "Duration": "File Duration (s)",
         "Confidence": "Confidence",
     }
 
     # Default columns for metadata
     metadata_default_columns = {
         "Site": "Site",
-        "Country": "country", #"Country",
-        "X": "N", #"Longitude",  # Changed from separate Longitude/Easting
-        "Y": "W", #"Latitude",   # Changed from separate Latitude/Northing
+        "Country": "country",
+        "X": "N",
+        "Y": "W",
     }
 
     localized_column_labels = {
@@ -56,12 +139,11 @@ def build_visualization_tab():
         "End Time": loc.localize("eval-tab-column-end-time-label"),
         "Class": loc.localize("eval-tab-column-class-label"),
         "Recording": loc.localize("eval-tab-column-recording-label"),
-        "Duration": loc.localize("eval-tab-column-duration-label"),
         "Confidence": loc.localize("eval-tab-column-confidence-label"),
         "Site": loc.localize("viz-tab-column-site-label"),
         "Country": loc.localize("viz-tab-column-country-label"),
-        "X": loc.localize("viz-tab-column-x-label"),  # Will show as "Longitude/Easting"
-        "Y": loc.localize("viz-tab-column-y-label"),  # Will show as "Latitude/Northing"
+        "X": loc.localize("viz-tab-column-x-label"),
+        "Y": loc.localize("viz-tab-column-y-label"),
     }
 
     def get_columns_from_uploaded_files(files):
@@ -98,56 +180,69 @@ def build_visualization_tab():
         pred_class,
         pred_confidence,
         pred_recording,
-        pred_duration,
         prediction_dir=None,
     ):
-        """
-        Creates a simplified DataProcessor for predictions only.
-        """
+        """Creates a simplified DataProcessor for predictions only."""
         if not prediction_files:
             return [], [], None, None
 
-        # If we haven't saved these predictions yet, save them
-        if prediction_dir is None:
-            prediction_dir = save_uploaded_files(prediction_files)
-
-        # Fallback for prediction columns
-        pred_start_time = pred_start_time if pred_start_time else prediction_default_columns["Start Time"]
-        pred_end_time = pred_end_time if pred_end_time else prediction_default_columns["End Time"]
-        pred_class = pred_class if pred_class else prediction_default_columns["Class"]
-        pred_confidence = pred_confidence if pred_confidence else prediction_default_columns["Confidence"]
-        pred_recording = pred_recording if pred_recording else prediction_default_columns["Recording"]
-        pred_duration = pred_duration if pred_duration else prediction_default_columns["Duration"]
-
-        cols_pred = {
-            "Start Time": pred_start_time,
-            "End Time": pred_end_time,
-            "Class": pred_class,
-            "Confidence": pred_confidence,
-            "Recording": pred_recording,
-            "Duration": pred_duration,
-        }
-
         try:
+            # Initialize processor
+            if prediction_dir is None:
+                prediction_dir = save_uploaded_files(prediction_files)
+
+            # Debug just number of files
+            print(f"\nProcessing {len(prediction_files)} prediction files")
+            print(f"Using prediction directory: {prediction_dir}")
+
+            # Set up column mappings with proper fallbacks
+            cols_pred = {}
+            for key, default in prediction_default_columns.items():
+                if key == "Start Time":
+                    cols_pred[key] = pred_start_time or default
+                elif key == "End Time":
+                    cols_pred[key] = pred_end_time or default
+                elif key == "Class":
+                    cols_pred[key] = pred_class or default
+                elif key == "Confidence":
+                    cols_pred[key] = pred_confidence or default
+                elif key == "Recording":
+                    cols_pred[key] = pred_recording or default
+
+            print("Using column mappings:", cols_pred)
+
             proc = DataProcessor(
                 prediction_directory_path=prediction_dir,
                 prediction_file_name=None,
                 columns_predictions=cols_pred,
             )
-            # Get available classes and recordings using the correct column name
-            avail_classes = list(proc.classes)
-            avail_recordings = proc.get_data()["recording_filename"].unique().tolist()
+            
+            # Get data and extract unique values
+            df = proc.get_data()
+            
+            # Debug dataframe shape and columns
+            print(f"\nLoaded DataFrame shape: {df.shape}")
+            print(f"DataFrame columns: {df.columns}")
+            
+            avail_classes = list(proc.classes) 
+            print(f"\nFound {len(avail_classes)} unique classes")
+            
+            # Get and clean up recording names consistently (strip and lowercase)
+            recordings = df["recording_filename"].dropna().unique()
+            avail_recordings = []
+            for rec in recordings:
+                if isinstance(rec, str):
+                    clean_name = os.path.splitext(os.path.basename(rec.strip()))[0].lower()
+                    if clean_name and clean_name not in avail_recordings:
+                        avail_recordings.append(clean_name)
+            avail_recordings.sort()
+            print(f"Found {len(avail_recordings)} unique recordings")
+
             return avail_classes, avail_recordings, proc, prediction_dir
-        except KeyError as e:
-            print(f"Column missing in files: {e}")
-            raise gr.Error(
-                f"{loc.localize('eval-tab-error-missing-col')}: "
-                + str(e)
-                + f". {loc.localize('eval-tab-error-missing-col-info')}"
-            ) from e
+
         except Exception as e:
-            print(f"Error initializing processor: {e}")
-            raise gr.Error(f"{loc.localize('eval-tab-error-init-processor')}:" + str(e)) from e
+            print(f"Error in initialize_processor: {e}")
+            raise gr.Error(f"Error initializing processor: {str(e)}")
 
     def update_prediction_columns(uploaded_files):
         """
@@ -156,7 +251,7 @@ def build_visualization_tab():
         cols = get_columns_from_uploaded_files(uploaded_files)
         cols = [""] + cols
         updates = []
-        for label in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]:
+        for label in ["Start Time", "End Time", "Class", "Confidence", "Recording"]:
             default_val = prediction_default_columns.get(label)
             val = default_val if default_val in cols else None
             updates.append(gr.update(choices=cols, value=val))
@@ -192,18 +287,17 @@ def build_visualization_tab():
 
     def update_selections(
         prediction_files,
-        metadata_files,  # New parameter
+        metadata_files,
         pred_start_time,
         pred_end_time,
         pred_class,
         pred_confidence,
         pred_recording,
-        pred_duration,
-        meta_site,  # New parameter
-        meta_country,  # New parameter
-        meta_x,  # Changed from separate easting/longitude
-        meta_y,  # Changed from separate northing/latitude
-        coordinate_format,  # New parameter
+        meta_site,
+        meta_country,
+        meta_x,
+        meta_y,
+        coordinate_format,
         current_classes,
         current_recordings,
     ):
@@ -212,7 +306,7 @@ def build_visualization_tab():
         Preserves any selected classes/recordings that remain valid.
         """
         prediction_dir = save_uploaded_files(prediction_files)
-        metadata_dir = save_uploaded_files(metadata_files)  # Save metadata files
+        metadata_dir = save_uploaded_files(metadata_files)
         
         avail_classes, avail_recordings, proc, prediction_dir = initialize_processor(
             prediction_files,
@@ -221,23 +315,27 @@ def build_visualization_tab():
             pred_class,
             pred_confidence,
             pred_recording,
-            pred_duration,
             prediction_dir,
         )
         
         state = ProcessorState(proc, prediction_dir, metadata_dir) if proc else None
 
-        # Preserve valid selections or default to all available
-        new_classes = (
-            avail_classes
-            if not current_classes
-            else [c for c in current_classes if c in avail_classes] or avail_classes
-        )
-        new_recordings = (
-            avail_recordings
-            if not current_recordings
-            else [r for r in current_recordings if r in avail_recordings] or avail_recordings
-        )
+        # Keep current selections if they exist in available options
+        new_classes = []
+        new_recordings = []
+
+        if current_classes:
+            new_classes = [c for c in current_classes if c in avail_classes]
+        if current_recordings:
+            normalized_current = [os.path.splitext(os.path.basename(r.strip()))[0].lower() 
+                               for r in current_recordings if isinstance(r, str)]
+            new_recordings = [r for r in normalized_current if r in avail_recordings]
+
+        # Default to all available if no valid selections remain
+        if not new_classes:
+            new_classes = avail_classes
+        if not new_recordings:
+            new_recordings = avail_recordings
 
         return (
             gr.update(choices=avail_classes, value=new_classes),
@@ -245,31 +343,73 @@ def build_visualization_tab():
             state,
         )
 
+    def update_datetime_defaults(processor_state):
+        """Update the default date range based on available predictions."""
+        if not processor_state or not processor_state.processor:
+            return [gr.update()] * 6  # Updated for 6 outputs (2 dates + 4 time dropdowns)
+        
+        df = processor_state.processor.get_data()
+        start_date, end_date = get_date_range(df)
+        
+        return [
+            gr.update(value=start_date),
+            gr.update(value=end_date),
+            gr.update(value="00"),  # Start hour
+            gr.update(value="00"),  # Start minute
+            gr.update(value="23"),  # End hour
+            gr.update(value="59"),  # End minute
+        ]
+
+    def combine_time_components(hour, minute):
+        """Combine hour and minute components into a time string."""
+        return f"{hour}:{minute}"
+
     def plot_predictions_action(
         proc_state: ProcessorState,
         selected_classes_list,
         selected_recordings_list,
+        confidence_threshold: float,
+        date_range_start,
+        date_range_end,
+        time_start_hour,
+        time_start_minute,
+        time_end_hour,
+        time_end_minute,
     ):
         """Uses ConfidencePlotter to plot confidence distributions for the selected classes."""
         if not proc_state or not proc_state.processor:
-            raise gr.Error(loc.localize("eval-tab-error-calc-metrics-first"), print_exception=False)
+            raise gr.Error(loc.localize("eval-tab-error-calc-metrics-first"))
 
         df = proc_state.processor.get_data()
         if df.empty:
             raise gr.Error("No predictions to show.")
 
-        # Filter data first
+        # Apply class and recording filters first
         col_class = proc_state.processor.get_column_name("Class")
         conf_col = proc_state.processor.get_column_name("Confidence")
         
         if selected_classes_list:
             df = df[df[col_class].isin(selected_classes_list)]
         if selected_recordings_list:
+            selected_recordings_list = [rec.lower() for rec in selected_recordings_list]
+            df["recording_filename"] = df["recording_filename"].apply(lambda x: os.path.splitext(os.path.basename(x.strip()))[0].lower() if isinstance(x, str) else x)
             df = df[df["recording_filename"].isin(selected_recordings_list)]
-            
-        if df.empty:
-            raise gr.Error("No predictions left after filtering.")
 
+        # Apply date and time filters
+        df = apply_datetime_filters(
+            df, 
+            date_range_start, 
+            date_range_end, 
+            time_start_hour, 
+            time_start_minute, 
+            time_end_hour, 
+            time_end_minute
+        )
+        
+        if df.empty:
+            raise gr.Error("No predictions match the selected date/time filters.")
+
+        # Create histogram plot (using Plotly) with fixed 10 bins (handled in the method)
         plotter = ConfidencePlotter(
             data=df,
             class_col=col_class,
@@ -277,31 +417,15 @@ def build_visualization_tab():
         )
 
         try:
-            # Get all classes in sorted order for consistent colors
-            all_classes = sorted(proc_state.processor.get_data()[col_class].unique())
-            
-            # Define base colors for both plots
-            base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
-            # Extend colors if needed by cycling through them
-            colors = base_colors * (1 + len(all_classes) // len(base_colors))
-            color_map = {cls: colors[i] for i, cls in enumerate(all_classes)}
-            
-            # Create the density plot using the color map
-            fig_smooth = plotter.plot_smooth_distribution_plotly(
-                bandwidth=0.2,
-                title="Smooth Distribution of Confidence Scores",
-                classes=selected_classes_list if selected_classes_list else all_classes,
-                color_map=color_map
-            )
-            
-            # Store color map in state
+            # Remove unsupported 'nbins' keyword; the method always uses 10 bins
+            fig_hist = plotter.plot_histogram_plotly(title="Histogram of Confidence Scores by Class")
             new_state = ProcessorState(
                 processor=proc_state.processor,
                 prediction_dir=proc_state.prediction_dir,
                 metadata_dir=proc_state.metadata_dir,
-                color_map=color_map
+                color_map=proc_state.color_map
             )
-            return [new_state, gr.update(visible=True, value=fig_smooth)]
+            return [new_state, gr.update(visible=True, value=fig_hist)]
         except Exception as e:
             raise gr.Error(f"Error creating plots: {str(e)}")
 
@@ -311,133 +435,123 @@ def build_visualization_tab():
         meta_x,
         meta_y,
         coordinate_format,
-        meta_site
+        meta_site,
+        confidence_threshold: float,
+        date_range_start,
+        date_range_end,
+        time_start_hour,
+        time_start_minute,
+        time_end_hour,
+        time_end_minute,
     ):
         """Plot spatial distribution of predictions by class."""
         if not proc_state or not proc_state.processor:
             raise gr.Error("Please load predictions first")
             
         try:
-            # Read metadata
+            # Read metadata file from the provided directory
             meta_files = list(Path(proc_state.metadata_dir).glob("*.csv"))
             if not meta_files:
                 raise gr.Error("No metadata files found")
-                
             metadata_df = pd.read_csv(meta_files[0])
-            print(f"Loaded metadata with columns: {metadata_df.columns.tolist()}")
             
-            # Convert coordinates if needed
-            if coordinate_format == "UTM":
-                print("Converting UTM coordinates...")
+            if coordinate_format != "UTM":
+                # Ensure expected source columns exist
+                if meta_x not in metadata_df.columns or meta_y not in metadata_df.columns:
+                    raise gr.Error("Metadata file missing expected coordinate columns.")
+                # Convert columns and create standardized 'latitude' and 'longitude'
+                metadata_df = metadata_df.copy()
+                metadata_df['latitude'] = pd.to_numeric(metadata_df[meta_x], errors='coerce')
+                metadata_df['longitude'] = pd.to_numeric(metadata_df[meta_y], errors='coerce')
+            else:
                 metadata_df = process_coordinates(
                     metadata_df,
                     country_col=meta_country,
                     easting_col=meta_x,
                     northing_col=meta_y
                 )
-                print(f"Converted coordinates: {len(metadata_df)} rows processed")
-            else:
-                print("Using Lat/Long coordinates directly")
-                metadata_df['latitude'] = pd.to_numeric(metadata_df[meta_y], errors='coerce')
-                metadata_df['longitude'] = pd.to_numeric(metadata_df[meta_x], errors='coerce')
             
-            # Set metadata in processor
-            try:
-                proc_state.processor.set_metadata(
-                    metadata_df,
-                    site_col=meta_site,
-                    lat_col='latitude',
-                    lon_col='longitude'
+            # Set metadata into processor
+            proc_state.processor.set_metadata(metadata_df, site_col=meta_site, lat_col='latitude', lon_col='longitude')
+            
+            # Get prediction data and apply filters
+            df = proc_state.processor.get_data()
+            
+            # Apply confidence threshold filter
+            conf_col = proc_state.processor.get_column_name("Confidence")
+            df = df[df[conf_col] >= confidence_threshold]
+            
+            # Apply date and time filters
+            df = apply_datetime_filters(
+                df, 
+                date_range_start, 
+                date_range_end, 
+                time_start_hour, 
+                time_start_minute, 
+                time_end_hour, 
+                time_end_minute
+            )
+            
+            if df.empty:
+                raise gr.Error("No predictions match the selected filters.")
+            
+            class_col = proc_state.processor.get_column_name("Class")
+            # Ensure that latitude and longitude exist in the data after merge
+            for col in ['latitude', 'longitude']:
+                if col not in df.columns:
+                    raise gr.Error(f"Column '{col}' is missing after merging metadata.")
+            
+            agg_df = df.groupby(['site_name', 'latitude', 'longitude', class_col]).size().reset_index(name='count')
+            if agg_df.empty:
+                raise gr.Error("No predictions with valid locations found")
+            
+            sorted_classes = sorted(agg_df[class_col].unique())
+            base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
+            colors = base_colors * (1 + len(sorted_classes) // len(base_colors))
+            color_map = {cls: colors[i] for i, cls in enumerate(sorted_classes)}
+            
+            fig = px.scatter_mapbox(
+                agg_df,
+                lat='latitude',
+                lon='longitude',
+                size='count',
+                color=class_col,
+                category_orders={class_col: sorted_classes},
+                color_discrete_map=color_map,
+                hover_data=['site_name', 'count'],
+                size_max=50,
+                zoom=10,
+                height=600,
+                title="Spatial Distribution of Predictions by Class"
+            )
+            max_count = max(agg_df['count'])
+            size_scale = 50
+            sizeref = 2.0 * max_count / (size_scale**2)
+            fig.update_traces(marker=dict(sizemin=3, sizemode='area', sizeref=sizeref, opacity=0.8))
+            fig.update_layout(
+                mapbox_style='open-street-map',
+                margin={"r":0,"t":30,"l":0,"b":0},
+                legend_title="Class",
+                showlegend=True,
+                mapbox=dict(center=dict(lat=agg_df['latitude'].mean(), lon=agg_df['longitude'].mean()), zoom=10)
+            )
+            fig.update_traces(
+                hovertemplate=(
+                    "Site: %{customdata[0]}<br>"
+                    "Count: %{customdata[1]}<br>"
+                    "Latitude: %{lat:.2f}<br>"
+                    "Longitude: %{lon:.2f}<br>"
+                    "<extra></extra>"
                 )
-            except Exception as e:
-                print(f"Error setting metadata: {e}")
-                raise gr.Error(f"Error setting metadata: {str(e)}")
-
-            try:
-                # Get aggregated prediction data
-                agg_df = proc_state.processor.get_aggregated_locations()
-                
-                if agg_df.empty:
-                    raise gr.Error("No predictions with valid locations found")
-
-                class_col = proc_state.processor.get_column_name("Class")
-                
-                # Ensure we have a color map
-                if not proc_state.color_map:
-                    # Create the same color mapping as in plot_predictions_action
-                    all_classes = sorted(proc_state.processor.get_data()[class_col].unique())
-                    base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
-                    colors = base_colors * (1 + len(all_classes) // len(base_colors))
-                    color_map = {cls: colors[i] for i, cls in enumerate(all_classes)}
-                else:
-                    color_map = proc_state.color_map
-
-                # Sort classes for consistent order
-                sorted_classes = sorted(agg_df[class_col].unique())
-
-                # Create map using Plotly
-                fig = px.scatter_mapbox(
-                    agg_df,
-                    lat='latitude',
-                    lon='longitude',
-                    size='count',
-                    color=class_col,
-                    category_orders={class_col: sorted_classes},
-                    color_discrete_map=color_map,
-                    hover_data=['site_name', 'count'],
-                    size_max=50,  # Increased from 50 to 100
-                    zoom=10,
-                    height=600,
-                    title="Spatial Distribution of Predictions by Class"
-                )
-
-                # Update traces for more distinctive size differences
-                max_count = max(agg_df['count'])
-                min_count = min(agg_df['count'])
-                size_scale = 50  # Maximum marker size
-                
-                # Calculate size reference for better scaling
-                sizeref = 2.0 * max_count / (size_scale**2)
-                
-                fig.update_traces(
-                    marker=dict(
-                        sizemin=3,  # Minimum marker size
-                        sizemode='area',
-                        sizeref=sizeref,  # Adjusted size reference
-                        opacity=0.8
-                    )
-                )
-                
-                # Update layout
-                fig.update_layout(
-                    mapbox_style='open-street-map',
-                    margin={"r":0,"t":30,"l":0,"b":0},
-                    legend_title="Species",
-                    showlegend=True,
-                    mapbox=dict(
-                        center=dict(
-                            lat=agg_df['latitude'].mean(),
-                            lon=agg_df['longitude'].mean()
-                        ),
-                        zoom=10  # Set a default zoom level that shows more context
-                    )
-                )
-                
-                return gr.update(value=fig, visible=True)
-                
-            except ValueError as ve:
-                print(f"Error in data processing: {ve}")
-                raise gr.Error(f"Error processing data: {str(ve)}")
-                
+            )
+            return gr.update(value=fig, visible=True)
         except Exception as e:
-            print(f"Error in plot_spatial_distribution: {str(e)}")
             raise gr.Error(f"Error creating map: {str(e)}")
 
     def get_selection_tables(directory):
         """Reads prediction txt files and metadata csv files from directory."""
         from pathlib import Path
         directory = Path(directory)
-        # Add support for both txt and csv files
         files = list(directory.glob("*.txt")) + list(directory.glob("*.csv"))
         return files
 
@@ -479,7 +593,7 @@ def build_visualization_tab():
             with gr.Accordion(loc.localize("eval-tab-prediction-col-accordion-label"), open=True):
                 with gr.Row():
                     prediction_columns: dict[str, gr.Dropdown] = {}
-                    for col in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]:
+                    for col in ["Start Time", "End Time", "Class", "Confidence", "Recording"]:
                         prediction_columns[col] = gr.Dropdown(choices=[], label=localized_column_labels[col])
 
         # Metadata columns box
@@ -487,7 +601,6 @@ def build_visualization_tab():
             with gr.Accordion(loc.localize("viz-tab-metadata-col-accordion-label"), open=True):
                 with gr.Row():
                     metadata_columns: dict[str, gr.Dropdown] = {}
-                    # Updated column list with merged coordinate columns
                     for col in ["Site", "Country", "X", "Y"]:
                         label = localized_column_labels[col]
                         if col == "X":
@@ -498,22 +611,22 @@ def build_visualization_tab():
                 
                 with gr.Row():
                     coordinate_format = gr.Radio(
-                        choices=["Lat/Long", "UTM"],
-                        value="Lat/Long",
+                        choices=["GCS", "UTM"],
+                        value="GCS",
                         label=loc.localize("viz-tab-coordinate-format-label"),
                         info=loc.localize("viz-tab-coordinate-format-info")
                     )
 
-        # Class and Recording Selection Box (changed back to gr.Group as in evaluation tab)
+        # Class and Recording Selection Box
         with gr.Group(visible=True) as class_recording_group:
-            with gr.Accordion("Select Classes and Recordings", open=False):
+            with gr.Accordion(loc.localize("viz-tab-class-recording-accordion-label"), open=False):
                 with gr.Row():
                     with gr.Column():
                         select_classes_checkboxgroup = gr.CheckboxGroup(
                             choices=[],
                             value=[],
-                            label="Classes",
-                            info="Select classes to include in visualization",
+                            label=loc.localize("viz-tab-classes-label"),
+                            info=loc.localize("viz-tab-classes-info"),
                             interactive=True,
                             elem_classes="custom-checkbox-group",
                         )
@@ -521,19 +634,85 @@ def build_visualization_tab():
                         select_recordings_checkboxgroup = gr.CheckboxGroup(
                             choices=[],
                             value=[],
-                            label="Recordings",
-                            info="Select recordings to include in visualization",
+                            label=loc.localize("viz-tab-recordings-label"),
+                            info=loc.localize("viz-tab-recordings-info"),
                             interactive=True,
                             elem_classes="custom-checkbox-group",
                         )
 
+        # Parameters Box
+        with gr.Group():
+            with gr.Accordion(loc.localize("viz-tab-parameters-accordion-label"), open=False):
+                with gr.Row():
+                    confidence_threshold = gr.Slider(
+                        minimum=0.01,
+                        maximum=0.99,
+                        value=0.10,
+                        step=0.01,
+                        label=loc.localize("viz-tab-confidence-threshold-label"),
+                        info=loc.localize("viz-tab-confidence-threshold-info")
+                    )
+                    
+                with gr.Row():
+                    date_range_start = gr.DateTime(
+                        label=loc.localize("viz-tab-date-range-start-label"),
+                        info=loc.localize("viz-tab-date-range-start-info"),
+                        interactive=True,
+                        show_label=True,
+                        include_time=False
+                    )
+                    date_range_end = gr.DateTime(
+                        label=loc.localize("viz-tab-date-range-end-label"),
+                        info=loc.localize("viz-tab-date-range-end-info"),
+                        interactive=True,
+                        show_label=True,
+                        include_time=False
+                    )
+
+                with gr.Row():
+                    with gr.Column():
+                        with gr.Row():
+                            time_start_hour = gr.Dropdown(
+                                choices=[f"{i:02d}" for i in range(24)],
+                                value="00",
+                                label=loc.localize("viz-tab-start-time-label-hour"),
+                                interactive=True
+                            )
+                            time_start_minute = gr.Dropdown(
+                                choices=[f"{i:02d}" for i in range(60)],
+                                value="00",
+                                label=loc.localize("viz-tab-start-time-label-minute"),
+                                interactive=True
+                            )
+                    
+                    with gr.Column():
+                        with gr.Row():
+                            time_end_hour = gr.Dropdown(
+                                choices=[f"{i:02d}" for i in range(24)],
+                                value="23",
+                                label=loc.localize("viz-tab-end-time-label-hour"),
+                                interactive=True
+                            )
+                            time_end_minute = gr.Dropdown(
+                                choices=[f"{i:02d}" for i in range(60)],
+                                value="59",
+                                label=loc.localize("viz-tab-end-time-label-minute"),
+                                interactive=True
+                            )
+
         # Action button and output for smooth distribution plot
-        plot_predictions_btn = gr.Button("Plot Confidence Distributions")
-        smooth_distribution_output = gr.Plot(label="Smooth Confidence Distribution", visible=False)
+        plot_predictions_btn = gr.Button(
+            loc.localize("viz-tab-plot-distributions-button-label"), 
+            variant="huggingface"
+        )
+        smooth_distribution_output = gr.Plot(label=loc.localize("viz-tab-distribution-plot-label"), visible=False)
 
         # Add map button and output after the existing plot components
-        plot_map_btn = gr.Button("Plot Spatial Distribution")
-        map_output = gr.Plot(label="Recording Locations", visible=False)
+        plot_map_btn = gr.Button(
+            loc.localize("viz-tab-plot-map-button-label"), 
+            variant="huggingface"
+        )
+        map_output = gr.Plot(label=loc.localize("viz-tab-map-plot-label"), visible=False)
 
         # Interactions
         def get_selection_func(state_key, on_select):
@@ -549,7 +728,7 @@ def build_visualization_tab():
         prediction_select_directory_btn.click(
             get_selection_func("eval-predictions-dir", update_prediction_columns),
             outputs=[prediction_files_state, prediction_directory_input, prediction_group]
-            + [prediction_columns[label] for label in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Duration"]],
+            + [prediction_columns[label] for label in ["Start Time", "End Time", "Class", "Confidence", "Recording"]],
             show_progress=True,
         )
 
@@ -586,7 +765,6 @@ def build_visualization_tab():
                     prediction_columns["Class"],
                     prediction_columns["Confidence"],
                     prediction_columns["Recording"],
-                    prediction_columns["Duration"],
                     metadata_columns["Site"],
                     metadata_columns["Country"],
                     metadata_columns["X"],
@@ -600,13 +778,35 @@ def build_visualization_tab():
                     select_recordings_checkboxgroup,
                     processor_state,
                 ],
+            ).success(
+                fn=update_datetime_defaults,
+                inputs=[processor_state],
+                outputs=[
+                    date_range_start,
+                    date_range_end,
+                    time_start_hour,
+                    time_start_minute,
+                    time_end_hour,
+                    time_end_minute
+                ]
             )
 
         # Plot button action
         plot_predictions_btn.click(
             fn=plot_predictions_action,
-            inputs=[processor_state, select_classes_checkboxgroup, select_recordings_checkboxgroup],
-            outputs=[processor_state, smooth_distribution_output],  # Add processor_state to outputs
+            inputs=[
+                processor_state,
+                select_classes_checkboxgroup,
+                select_recordings_checkboxgroup,
+                confidence_threshold,
+                date_range_start,
+                date_range_end,
+                time_start_hour,
+                time_start_minute,
+                time_end_hour,
+                time_end_minute,
+            ],
+            outputs=[processor_state, smooth_distribution_output]
         )
 
         # Add click handler for map button
@@ -615,10 +815,17 @@ def build_visualization_tab():
             inputs=[
                 processor_state,
                 metadata_columns["Country"],
-                metadata_columns["X"],  # Changed from separate longitude/easting
-                metadata_columns["Y"],  # Changed from separate latitude/northing
+                metadata_columns["X"],
+                metadata_columns["Y"],
                 coordinate_format,
-                metadata_columns["Site"]
+                metadata_columns["Site"],
+                confidence_threshold,
+                date_range_start,
+                date_range_end,
+                time_start_hour,
+                time_start_minute,
+                time_end_hour,
+                time_end_minute,
             ],
             outputs=[map_output]
         )

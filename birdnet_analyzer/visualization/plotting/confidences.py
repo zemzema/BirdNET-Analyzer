@@ -129,56 +129,102 @@ class ConfidencePlotter:
         plt.tight_layout()
         plt.show()
 
-    def plot_histogram_plotly(
+    def plot_histogram_matplotlib(
         self,
-        nbins: int = 50,
-        facet_col: bool = False,
-        title="Histogram of Confidence Scores by Class"
+        bins: int = 30,
+        smooth: bool = False,
+        alpha: float = 0.6,
+        title: str = "Histogram of Confidence Scores by Class",
+        figsize: tuple = (6, 8)
     ):
         """
-        Creates a stacked or faceted histogram plot using Plotly Express,
-        with each class as a separate color or facet.
-
-        Args:
-            nbins (int): Number of bins for the histogram.
-            facet_col (bool): If True, show each class in its own column (facet).
-                              If False, stack them with different colors.
-            title (str): Title of the Plotly figure.
-
-        Returns:
-            plotly.graph_objects.Figure: The resulting Plotly figure.
+        Creates a per-class histogram plot using matplotlib.
+        One histogram is plotted for each class with vertical offsets.
+        If smooth is True, the histogram counts are smoothed via convolution.
+        The style (colors, transparency, labeling) matches that of the KDE/ridgeline plot.
         """
-        if facet_col:
-            # Use facet_col to place each class in its own subplot
-            fig = px.histogram(
-                self.data,
-                x=self.conf_col,
-                color=self.class_col,
-                facet_col=self.class_col,
-                facet_col_wrap=3,  # Adjust number of columns as needed
-                nbins=nbins,
-                title=title
-            )
-            # Adjust layout to avoid overlapping labels
-            fig.update_layout(height=600, width=1000)
-            fig.update_yaxes(matches=None)  # so each facet has its own y-scale
-        else:
-            # Use color to differentiate classes in a single histogram
-            fig = px.histogram(
-                self.data,
-                x=self.conf_col,
-                color=self.class_col,
-                nbins=nbins,
-                barmode="overlay",  # or "stack"
-                title=title
-            )
-            fig.update_layout(barmode="overlay", hovermode="x unified")
-            fig.update_traces(opacity=0.6)
+        fig, ax = plt.subplots(figsize=figsize)
+        cm = plt.get_cmap("Spectral_r")
+        num_classes = len(self.classes)
+        # Define vertical offsets (similar to ridgeline)
+        y_offsets = np.linspace(0, -(num_classes - 1) * 0.6, num_classes)
+        
+        for i, cls in enumerate(self.classes):
+            cls_data = self.data.loc[self.data[self.class_col] == cls, self.conf_col].dropna().values
+            if len(cls_data) < 1:
+                continue
+            # Compute histogram normalized to density
+            counts, bin_edges = np.histogram(cls_data, bins=bins, density=True)
+            # Compute center values for bins
+            x_vals = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+            # Optionally smooth the counts using a simple moving average
+            if smooth:
+                window = np.ones(5) / 5
+                counts = np.convolve(counts, window, mode="same")
+            y_offset = y_offsets[i]
+            color = cm(i / num_classes)
+            ax.fill_between(x_vals, y_offset, counts + y_offset, color=color, alpha=alpha)
+            ax.plot(x_vals, counts + y_offset, color=color, alpha=alpha)
+            # Label the left side with class name
+            ax.text(bin_edges[0], y_offset + 0.02, cls, ha="right", va="bottom", fontsize=9)
+        
+        ax.set_yticks([])
+        ax.set_ylabel("")
+        ax.set_xlabel("Confidence Score")
+        ax.set_title(title)
+        plt.tight_layout()
+        plt.show()
+        return fig
 
-        fig.update_xaxes(title_text="Confidence Score")
-        fig.update_yaxes(title_text="Count")
-
-        fig.show()
+    def plot_histogram_plotly(
+        self,
+        title: str = "Histogram of Confidence Scores by Class"
+    ) -> go.Figure:
+        """
+        Creates a per-class histogram plot using Plotly.
+        Each class is plotted as an overlaid bar chart using exactly 10 bins and colors,
+        with the same style (legend position, margins, axis titles) as the smooth density plot.
+        """
+        classes = sorted(self.data[self.class_col].dropna().unique())
+        if not classes:
+            raise ValueError("Not enough data to plot.")
+        
+        # Use same base colors as for KDE
+        base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
+        colors = base_colors * (1 + len(classes) // len(base_colors))
+        color_map = {cls: colors[i] for i, cls in enumerate(classes)}
+        
+        fig = go.Figure()
+        # Force exactly 10 bins
+        nbins = 10
+        for cls in classes:
+            class_data = self.data[self.data[self.class_col] == cls][self.conf_col].dropna()
+            if len(class_data) == 0:
+                continue
+            counts, bin_edges = np.histogram(class_data, bins=nbins)
+            # Compute the bin centers
+            x_vals = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+            fig.add_trace(go.Bar(
+                x=x_vals,
+                y=counts,
+                name=str(cls),
+                marker_color=color_map.get(cls),
+                opacity=0.6,
+                hovertemplate=(
+                    "Confidence: %{x:.2f}<br>"
+                    "Count: %{y}<br>"
+                    "<extra></extra>"
+                )
+            ))
+        fig.update_layout(
+            barmode="overlay",
+            title=title,
+            xaxis_title="Confidence Score",
+            yaxis_title="Count",
+            legend_title="Class",
+            legend=dict(x=1.02, y=1),
+            margin=dict(r=150)
+        )
         return fig
 
     def plot_smooth_distribution_plotly(

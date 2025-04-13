@@ -82,6 +82,8 @@ class DataProcessor:
         # Load and prepare data
         self.load_data()
         self.predictions_df = self._prepare_dataframe(self.predictions_df)
+        # Create the initial merged dataset as a copy of predictions
+        self.merged_df = self.predictions_df.copy()
 
         # Ensure that the confidence column is numeric.
         conf_col = self.get_column_name("Confidence")
@@ -203,22 +205,29 @@ class DataProcessor:
         return df
 
     def _prepare_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Enhanced preparation of DataFrame including datetime processing.
-        """
-        # First do the original preparation
+        """Enhanced preparation of DataFrame including datetime processing."""
         recording_col = self.get_column_name("Recording")
-        if recording_col in df.columns:
-            df["recording_filename"] = extract_recording_filename(df[recording_col])
-            # Add filename column as an alias for compatibility
-            df["filename"] = df["recording_filename"]
-        else:
-            if "source_file" in df.columns:
-                df["recording_filename"] = extract_recording_filename_from_filename(df["source_file"])
-                df["filename"] = df["recording_filename"]
+        
+        try:
+            # Extract and clean recording filenames
+            if recording_col in df.columns:
+                df["recording_filename"] = df[recording_col].apply(
+                    lambda x: os.path.splitext(os.path.basename(str(x)))[0]
+                    if pd.notnull(x) else ""
+                )
             else:
-                df["recording_filename"] = ""
-                df["filename"] = ""
+                df["recording_filename"] = df["source_file"].apply(
+                    lambda x: os.path.splitext(os.path.basename(str(x)))[0]
+                    if pd.notnull(x) else ""
+                )
+            
+            # Additional cleanup
+            df["recording_filename"] = df["recording_filename"].str.strip()
+            df["recording_filename"] = df["recording_filename"].replace('', pd.NA)
+            
+        except Exception as e:
+            print(f"Warning: Error processing filenames: {e}")
+            df["recording_filename"] = pd.NA
 
         # Extract datetime information
         datetime_info = df['recording_filename'].apply(self._extract_datetime_from_filename)
@@ -241,31 +250,29 @@ class DataProcessor:
         return df
 
     def set_metadata(self, metadata_df: pd.DataFrame, 
-                    site_col: str = 'Site',
-                    lat_col: str = 'Latitude',
-                    lon_col: str = 'Longitude') -> None:
+                     site_col: str = 'Site',
+                     lat_col: str = 'Latitude',
+                     lon_col: str = 'Longitude') -> None:
         """
-        Sets the metadata DataFrame with standardized column names.
+        Sets the metadata DataFrame with standardized column names and merges it with predictions_df.
         """
-        # Ensure the source columns exist
-        if not all(col in metadata_df.columns for col in [site_col, lat_col, lon_col]):
-            missing = [col for col in [site_col, lat_col, lon_col] if col not in metadata_df.columns]
-            raise ValueError(f"Missing columns in metadata: {missing}")
-
-        # Create a copy to avoid modifying the original
+        # Ensure required columns exist
+        for col in [site_col, lat_col, lon_col]:
+            if col not in metadata_df.columns:
+                raise ValueError(f"Missing column '{col}' in metadata.")
         self.metadata_df = metadata_df.copy()
-        
-        # Rename columns
-        column_mapping = {
-            site_col: 'site_name',
-            lat_col: 'latitude',
-            lon_col: 'longitude'
-        }
-        self.metadata_df = self.metadata_df.rename(columns=column_mapping)
-        
-        # Apply coordinate conversion if numeric
+        # Standardize column names
+        mapping = {site_col: 'site_name', lat_col: 'latitude', lon_col: 'longitude'}
+        self.metadata_df.rename(columns=mapping, inplace=True)
         self.metadata_df['latitude'] = pd.to_numeric(self.metadata_df['latitude'], errors='coerce')
         self.metadata_df['longitude'] = pd.to_numeric(self.metadata_df['longitude'], errors='coerce')
+        # Unconditionally merge metadata into predictions and store as merged_df:
+        merged = self.predictions_df.copy()
+        merged["latitude"] = merged["site_name"].map(self.metadata_df.set_index("site_name")["latitude"])
+        merged["longitude"] = merged["site_name"].map(self.metadata_df.set_index("site_name")["longitude"])
+        if merged["latitude"].isnull().all():
+            raise ValueError("All latitude values are missing after merging metadata.")
+        self.merged_df = merged.copy()
 
     def get_column_name(self, field_name: str, prediction: bool = True) -> str:
         """
@@ -294,11 +301,11 @@ class DataProcessor:
 
     def get_data(self) -> pd.DataFrame:
         """
-        Retrieves a copy of the prediction DataFrame.
-
-        Returns:
-            pd.DataFrame: A copy of the `predictions_df`.
+        Retrieves a copy of the merged prediction DataFrame.
         """
+        # Return the complete merged dataset if available.
+        if hasattr(self, "merged_df") and not self.merged_df.empty:
+            return self.merged_df.copy()
         return self.predictions_df.copy()
 
     def filter_data(
@@ -321,11 +328,13 @@ class DataProcessor:
         Returns:
             pd.DataFrame: The filtered DataFrame.
         """
-        df = self.get_data()  # Work on a copy
+        df = self.get_data()  # Work on a copy of the data
 
-        # Filter by recordings
-        if selected_recordings is not None and "recording_filename" in df.columns:
-            df = df[df["recording_filename"].isin(selected_recordings)]
+        # Filter by recordings – clean each selection consistently
+        if selected_recordings:
+            clean_selected = [os.path.splitext(os.path.basename(r.strip()))[0] 
+                              for r in selected_recordings if r.strip()]
+            df = df[df["recording_filename"].isin(clean_selected)]
 
         # Filter by classes
         class_col = self.get_column_name("Class")
@@ -339,16 +348,20 @@ class DataProcessor:
 
         return df
 
-    def get_aggregated_locations(self, 
-                               selected_classes: Optional[List[str]] = None) -> pd.DataFrame:
+    def get_aggregated_locations(self, selected_classes: Optional[List[str]] = None) -> pd.DataFrame:
         """Returns aggregated prediction counts by location and class."""
         df = self.get_data()
         
-        # Apply metadata and remove invalid records
+        # Apply metadata and remove invalid records.
         df = self._add_metadata_info(df)
         if df.empty:
             raise ValueError("No valid predictions with matching site IDs found")
-
+        
+        # Ensure metadata columns exist.
+        for col in ['latitude', 'longitude']:
+            if col not in df.columns:
+                raise ValueError(f"Metadata column '{col}' is missing. Please set metadata with valid latitude and longitude fields.")
+        
         class_col = self.get_column_name("Class")
         if selected_classes:
             df = df[df[class_col].isin(selected_classes)]
