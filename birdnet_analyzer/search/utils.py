@@ -1,5 +1,5 @@
 import numpy as np
-from perch_hoplite.db import brutalism, sqlite_usearch_impl
+from perch_hoplite.db import brutalism
 from perch_hoplite.db.search_results import SearchResult
 from scipy.spatial.distance import euclidean
 
@@ -54,10 +54,6 @@ def get_query_embedding(queryfile_path):
     data = np.array(samples, dtype="float32")
     query = model.embeddings(data)
     return query
-
-
-def get_database(database_path):
-    return sqlite_usearch_impl.SQLiteUsearchDB.create(database_path).thread_split()
 
 
 def get_search_results(

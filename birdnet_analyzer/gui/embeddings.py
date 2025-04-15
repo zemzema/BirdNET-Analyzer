@@ -4,10 +4,11 @@ from functools import partial
 import gradio as gr
 
 import birdnet_analyzer.config as cfg
-import birdnet_analyzer.gui.utils as gu
 import birdnet_analyzer.gui.localization as loc
 import birdnet_analyzer.gui.settings as gui_settings
-
+import birdnet_analyzer.gui.utils as gu
+from birdnet_analyzer.embeddings.core import get_database as get_embeddings_database
+from birdnet_analyzer.search.core import get_database as get_search_database
 
 SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
 PAGE_SIZE = 4
@@ -37,8 +38,7 @@ def update_export_state(audio_infos, checkbox_value, export_state: dict):
     return export_state
 
 
-@gu.gui_runtime_error_handler
-def run_embeddings(
+def rum_embeddings_with_tqdm_tracking(
     input_path,
     db_directory,
     db_name,
@@ -50,14 +50,41 @@ def run_embeddings(
     fmax,
     progress=gr.Progress(track_tqdm=True),
 ):
-    from birdnet_analyzer.embeddings.utils import get_database, run
+    return run_embeddings(
+        input_path,
+        db_directory,
+        db_name,
+        overlap,
+        threads,
+        batch_size,
+        audio_speed,
+        fmin,
+        fmax,
+        progress,
+    )
+
+
+@gu.gui_runtime_error_handler
+def run_embeddings(
+    input_path,
+    db_directory,
+    db_name,
+    overlap,
+    threads,
+    batch_size,
+    audio_speed,
+    fmin,
+    fmax,
+    progress,
+):
+    from birdnet_analyzer.embeddings.utils import run
 
     gu.validate(input_path, loc.localize("embeddings-input-dir-validation-message"))
     gu.validate(db_directory, loc.localize("embeddings-db-dir-validation-message"))
     gu.validate(db_name, loc.localize("embeddings-db-name-validation-message"))
     db_path = os.path.join(db_directory, db_name)
 
-    db = get_database(db_path)
+    db = get_embeddings_database(db_path)
 
     try:
         settings = db.get_metadata("birdnet_analyzer_settings")
@@ -89,13 +116,13 @@ def run_embeddings(
 
 @gu.gui_runtime_error_handler
 def run_search(db_path, query_path, max_samples, score_fn, crop_mode, crop_overlap):
-    from birdnet_analyzer.search.utils import get_database, get_search_results
+    from birdnet_analyzer.search.utils import get_search_results
 
     gu.validate(db_path, loc.localize("embeddings-search-db-validation-message"))
     gu.validate(query_path, loc.localize("embeddings-search-query-validation-message"))
     gu.validate(max_samples, loc.localize("embeddings-search-max-samples-validation-message"))
 
-    db = get_database(db_path)
+    db = get_search_database(db_path)
     settings = db.get_metadata("birdnet_analyzer_settings")
 
     results = get_search_results(
@@ -136,21 +163,9 @@ def run_export(export_state):
         gr.Info(loc.localize("embeddings-search-export-no-results-info"))
 
 
-def get_embeddings_db(db_path):
-    from birdnet_analyzer.embeddings.utils import get_database
-
-    return get_database(db_path)
-
-
-def get_search_db(db_path):
-    from birdnet_analyzer.search.utils import get_database
-
-    return get_database(db_path)
-
-
 def build_embeddings_tab():
-    import birdnet_analyzer.utils as utils
     import birdnet_analyzer.audio as audio
+    import birdnet_analyzer.utils as utils
 
     with gr.Tab(loc.localize("embeddings-tab-title")):
         with gr.Tab(loc.localize("embeddings-extract-tab-title")):
@@ -240,11 +255,14 @@ def build_embeddings_tab():
                 if dir_name:
                     db_path = os.path.join(dir_name, db_name_tb.value)
                     gui_settings.set_state("embeddings-db-dir", dir_name)
+
                     if os.path.exists(db_path):
-                        db = get_embeddings_db(db_path)
+                        db = get_embeddings_database(db_path)
+
                         try:
                             db.get_metadata("birdnet_analyzer_settings")
                             db.db.close()
+
                             return (
                                 dir_name,
                                 gr.Textbox(label=dir_name, visible=True),
@@ -254,6 +272,7 @@ def build_embeddings_tab():
                             )
                         except KeyError:
                             db.db.close()
+
                             return (
                                 dir_name,
                                 gr.Textbox(label=dir_name, visible=True),
@@ -282,7 +301,7 @@ def build_embeddings_tab():
                 db_path = os.path.join(dir_name, db_name)
 
                 if db_name and os.path.exists(db_path):
-                    db = get_embeddings_db(db_path)
+                    db = get_embeddings_database(db_path)
 
                     try:
                         db.get_metadata("birdnet_analyzer_settings")
@@ -315,7 +334,7 @@ def build_embeddings_tab():
             start_btn = gr.Button(loc.localize("embeddings-tab-start-button-label"), variant="huggingface")
 
             start_btn.click(
-                run_embeddings,
+                rum_embeddings_with_tqdm_tracking,
                 inputs=[
                     input_directory_state,
                     db_directory_state,
@@ -329,6 +348,7 @@ def build_embeddings_tab():
                 ],
                 outputs=[progress_plot, audio_speed_slider, fmin_number, fmax_number],
                 show_progress_on=[progress_plot],
+                show_progress=True,
             )
 
         with gr.Tab(loc.localize("embeddings-search-tab-title")):
@@ -367,7 +387,7 @@ def build_embeddings_tab():
 
                     def on_db_selection_click():
                         folder = gu.select_folder(state_key="embeddings_search_db")
-                        db = get_embeddings_db(folder)
+                        db = get_embeddings_database(folder)
                         embedding_count = db.count_embeddings()
                         settings = db.get_metadata("birdnet_analyzer_settings")
                         frequencies = f"{settings['BANDPASS_FMIN']} - {settings['BANDPASS_FMAX']} Hz"
@@ -449,7 +469,7 @@ def build_embeddings_tab():
                         import numpy as np
 
                         if audiofilepath and db_selection:
-                            db = get_embeddings_db(db_selection)
+                            db = get_embeddings_database(db_selection)
                             settings = db.get_metadata("birdnet_analyzer_settings")
                             audio_speed = settings["AUDIO_SPEED"]
                             fmin = settings["BANDPASS_FMIN"]
@@ -516,7 +536,7 @@ def build_embeddings_tab():
                     def render_results(results, page, db_path, exports):
                         with gr.Row():
                             if db_path is not None and len(results) > 0:
-                                db = get_search_db(db_path)
+                                db = get_search_database(db_path)
                                 settings = db.get_metadata("birdnet_analyzer_settings")
 
                                 for i, r in enumerate(results[page]):
