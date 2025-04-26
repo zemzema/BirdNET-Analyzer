@@ -8,7 +8,6 @@ from pathlib import Path
 import datetime
 
 import gradio as gr
-import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
 
@@ -25,6 +24,7 @@ class ProcessorState(typing.NamedTuple):
     prediction_dir: str
     metadata_dir: str
     color_map: typing.Optional[typing.Dict[str, str]] = None
+    class_thresholds: typing.Optional[pd.DataFrame] = None
 
 
 def get_date_range(df: pd.DataFrame) -> tuple:
@@ -108,6 +108,42 @@ def apply_datetime_filters(df, date_range_start, date_range_end,
             return filtered_df
 
     return filtered_df
+
+
+def apply_class_thresholds(df: pd.DataFrame, thresholds_df: pd.DataFrame, class_col: str, conf_col: str) -> pd.DataFrame:
+    """Apply class-specific confidence thresholds."""
+    if df.empty:
+        return df
+    if thresholds_df is None or thresholds_df.empty:
+        return df
+
+    try:
+        # Ensure threshold column is numeric and clip values
+        thresholds_df = thresholds_df.copy()
+        thresholds_df['Threshold'] = pd.to_numeric(thresholds_df['Threshold'], errors='coerce')
+        thresholds_df['Threshold'] = thresholds_df['Threshold'].fillna(0.10).clip(0.01, 0.99) # Default 0.10 if invalid
+
+        # Prepare for merge
+        threshold_map = thresholds_df.set_index('Class')['Threshold']
+        
+        # Map thresholds to the main dataframe
+        df['class_threshold'] = df[class_col].map(threshold_map)
+        
+        # Apply default threshold if class not in map (shouldn't happen with proper init)
+        df['class_threshold'] = df['class_threshold'].fillna(0.10) 
+
+        # Filter based on class-specific threshold
+        filtered_df = df[df[conf_col] >= df['class_threshold']].copy()
+        
+        # Drop the temporary threshold column
+        filtered_df.drop(columns=['class_threshold'], inplace=True)
+        
+        return filtered_df
+
+    except Exception as e:
+        print(f"Error applying class thresholds: {e}")
+        # Return original df if error occurs
+        return df
 
 
 def build_visualization_tab():
@@ -300,6 +336,7 @@ def build_visualization_tab():
         """
         Called to create or update the processor based on current file uploads and column selections.
         Preserves any selected classes/recordings that remain valid.
+        Initializes the class threshold DataFrame and makes the update button visible.
         """
         prediction_dir = save_uploaded_files(prediction_files)
         metadata_dir = save_uploaded_files(metadata_files)
@@ -314,7 +351,30 @@ def build_visualization_tab():
             prediction_dir,
         )
         
-        state = ProcessorState(proc, prediction_dir, metadata_dir) if proc else None
+        # Initialize class thresholds DataFrame
+        class_thresholds_init_df = None
+        threshold_df_update = gr.update(visible=False, value=None) # Default to hidden
+        json_file_upload_update = gr.update(visible=False) # Add visibility for JSON upload
+        json_load_btn_update = gr.update(visible=False) # Add visibility for JSON load button
+        
+        if proc:
+            # Create DataFrame for thresholds
+            class_thresholds_init_df = pd.DataFrame({
+                'Class': sorted(avail_classes),
+                'Threshold': [0.10] * len(avail_classes) # Default threshold
+            })
+            threshold_df_update = gr.update(visible=True, value=class_thresholds_init_df)
+            json_file_upload_update = gr.update(visible=True) # Make JSON upload visible
+            json_load_btn_update = gr.update(visible=True) # Make JSON load button visible
+
+            state = ProcessorState(
+                processor=proc, 
+                prediction_dir=prediction_dir, 
+                metadata_dir=metadata_dir,
+                class_thresholds=class_thresholds_init_df # Store initial thresholds in state
+            )
+        else:
+            state = None # No processor created
 
         # Keep current selections if they exist in available options
         new_classes = []
@@ -337,6 +397,9 @@ def build_visualization_tab():
             gr.update(choices=avail_classes, value=new_classes),
             gr.update(choices=avail_recordings, value=new_recordings),
             state,
+            threshold_df_update, # Return update for the DataFrame UI
+            json_file_upload_update, # Return update for JSON upload visibility
+            json_load_btn_update # Return update for JSON load button visibility
         )
 
     def update_datetime_defaults(processor_state):
@@ -364,7 +427,6 @@ def build_visualization_tab():
         proc_state: ProcessorState,
         selected_classes_list,
         selected_recordings_list,
-        confidence_threshold: float,
         date_range_start,
         date_range_end,
         time_start_hour,
@@ -413,13 +475,13 @@ def build_visualization_tab():
         )
 
         try:
-            # Remove unsupported 'nbins' keyword; the method always uses 10 bins
             fig_hist = plotter.plot_histogram_plotly(title="Histogram of Confidence Scores by Class")
             new_state = ProcessorState(
                 processor=proc_state.processor,
                 prediction_dir=proc_state.prediction_dir,
                 metadata_dir=proc_state.metadata_dir,
-                color_map=proc_state.color_map
+                color_map=proc_state.color_map,
+                class_thresholds=proc_state.class_thresholds
             )
             return [new_state, gr.update(visible=True, value=fig_hist)]
         except Exception as e:
@@ -430,7 +492,6 @@ def build_visualization_tab():
         meta_x,
         meta_y,
         meta_site,
-        confidence_threshold: float,
         date_range_start,
         date_range_end,
         time_start_hour,
@@ -442,7 +503,13 @@ def build_visualization_tab():
         if not proc_state or not proc_state.processor:
             raise gr.Error("Please load predictions first")
             
+        if proc_state.class_thresholds is None:
+            raise gr.Error("Class thresholds not initialized. Load data first.") 
+            
         try:
+            # Validate thresholds from state
+            validated_thresholds_df = proc_state.class_thresholds
+
             # Read metadata file from the provided directory
             meta_files = list(Path(proc_state.metadata_dir).glob("*.csv"))
             if not meta_files:
@@ -468,9 +535,10 @@ def build_visualization_tab():
             # Get prediction data and apply filters
             df = proc_state.processor.get_data()
             
-            # Apply confidence threshold filter
+            # Apply class-specific confidence threshold filter using validated thresholds
             conf_col = proc_state.processor.get_column_name("Confidence")
-            df = df[df[conf_col] >= confidence_threshold]
+            class_col = proc_state.processor.get_column_name("Class")
+            df = apply_class_thresholds(df, validated_thresholds_df, class_col, conf_col)
             
             # Apply date and time filters
             df = apply_datetime_filters(
@@ -541,7 +609,8 @@ def build_visualization_tab():
                 processor=proc_state.processor,
                 prediction_dir=proc_state.prediction_dir,
                 metadata_dir=proc_state.metadata_dir,
-                color_map=color_map
+                color_map=color_map,
+                class_thresholds=validated_thresholds_df
             )
             
             # Get sorted classes for category order, with "No Detections" first
@@ -634,7 +703,6 @@ def build_visualization_tab():
         use_boxplot: bool,
         selected_classes_list,
         selected_recordings_list,
-        confidence_threshold: float,
         date_range_start,
         date_range_end,
         time_start_hour,
@@ -646,11 +714,18 @@ def build_visualization_tab():
         if not proc_state or not proc_state.processor:
             raise gr.Error("Please load predictions first")
             
+        if proc_state.class_thresholds is None:
+            raise gr.Error("Class thresholds not initialized. Load data first.")
+            
+        # Validate thresholds from state
+        validated_thresholds_df = proc_state.class_thresholds
+            
         # Get data and apply all filters
         df = proc_state.processor.get_data()
         
         # Apply class and recording filters
         col_class = proc_state.processor.get_column_name("Class")
+        conf_col = proc_state.processor.get_column_name("Confidence")
         if selected_classes_list:
             df = df[df[col_class].isin(selected_classes_list)]
         if selected_recordings_list:
@@ -661,9 +736,8 @@ def build_visualization_tab():
             )
             df = df[df["recording_filename"].isin(selected_recordings_list)]
             
-        # Apply confidence threshold
-        conf_col = proc_state.processor.get_column_name("Confidence")
-        df = df[df[conf_col] >= confidence_threshold]
+        # Apply class-specific confidence thresholds using validated thresholds
+        df = apply_class_thresholds(df, validated_thresholds_df, col_class, conf_col)
         
         # Apply date and time filters
         df = apply_datetime_filters(
@@ -783,16 +857,6 @@ def build_visualization_tab():
         with gr.Group():
             with gr.Accordion(loc.localize("viz-tab-parameters-accordion-label"), open=False):
                 with gr.Row():
-                    confidence_threshold = gr.Slider(
-                        minimum=0.01,
-                        maximum=0.99,
-                        value=0.10,
-                        step=0.01,
-                        label=loc.localize("viz-tab-confidence-threshold-label"),
-                        info=loc.localize("viz-tab-confidence-threshold-info")
-                    )
-                    
-                with gr.Row():
                     date_range_start = gr.DateTime(
                         label=loc.localize("viz-tab-date-range-start-label"),
                         info=loc.localize("viz-tab-date-range-start-info"),
@@ -824,7 +888,7 @@ def build_visualization_tab():
                                 interactive=True
                             )
                     
-                    with gr.Column():
+                    with gr.Column(): 
                         with gr.Row():
                             time_end_hour = gr.Dropdown(
                                 choices=[f"{i:02d}" for i in range(24)],
@@ -850,6 +914,31 @@ def build_visualization_tab():
                         label="Use Box Plots",
                         info="Show distribution as box plots instead of counts",
                         value=False
+                    )
+                
+                # Threshold components moved back inside this Accordion
+                with gr.Row():
+                     class_thresholds_df = gr.DataFrame(
+                         headers=["Class", "Threshold"],
+                         datatype=["str", "number"],
+                         label="Class Confidence Thresholds (Read-only)",
+                         interactive=False, # Make DataFrame read-only
+                         visible=False,
+                         col_count=(2, "fixed")
+                     )
+                # Add JSON Upload components
+                with gr.Row():
+                    json_threshold_upload = gr.File(
+                        label="Load Thresholds from JSON",
+                        file_types=[".json"],
+                        visible=False,
+                        scale=3 # Give file upload more space
+                    )
+                    load_json_thresholds_btn = gr.Button(
+                        "Load JSON",
+                        variant="secondary",
+                        visible=False,
+                        scale=1 # Smaller button
                     )
 
         # Warning message about model validation and interpretation
@@ -940,9 +1029,23 @@ def build_visualization_tab():
             outputs=[metadata_group],
         )
 
-        # Update processor and selections when columns change
-        for comp in list(prediction_columns.values()) + list(metadata_columns.values()):
-            comp.change(
+        # Update processor and selections when columns change or files change
+        # Consolidate triggers for update_selections
+        update_triggers = [
+            prediction_files_state,
+            metadata_files_state,
+            prediction_columns["Start Time"],
+            prediction_columns["End Time"],
+            prediction_columns["Class"],
+            prediction_columns["Confidence"],
+            prediction_columns["Recording"],
+            metadata_columns["Site"],
+            metadata_columns["X"],
+            metadata_columns["Y"],
+        ]
+
+        for trigger in update_triggers:
+            trigger.change(
                 fn=update_selections,
                 inputs=[
                     prediction_files_state,
@@ -955,14 +1058,18 @@ def build_visualization_tab():
                     metadata_columns["Site"],
                     metadata_columns["X"],
                     metadata_columns["Y"],
-                    select_classes_checkboxgroup,
-                    select_recordings_checkboxgroup,
+                    select_classes_checkboxgroup, # Pass current selections
+                    select_recordings_checkboxgroup, # Pass current selections
                 ],
                 outputs=[
                     select_classes_checkboxgroup,
                     select_recordings_checkboxgroup,
                     processor_state,
+                    class_thresholds_df, # Output to update the DataFrame UI
+                    json_threshold_upload, # Add output for JSON upload visibility
+                    load_json_thresholds_btn # Add output for JSON load button visibility
                 ],
+                # Trigger date updates only on success of processor update
             ).success(
                 fn=update_datetime_defaults,
                 inputs=[processor_state],
@@ -976,14 +1083,91 @@ def build_visualization_tab():
                 ]
             )
 
-        # Plot button action
+        # Function to load thresholds from JSON file
+        def load_thresholds_from_json(current_state: ProcessorState, json_file_obj) -> typing.Tuple[ProcessorState, pd.DataFrame]:
+            """Loads thresholds from a JSON file, updates state, and refreshes the UI DataFrame."""
+            # Correctly check if state exists and if the thresholds DataFrame is None or empty
+            if not current_state or current_state.class_thresholds is None or current_state.class_thresholds.empty:
+                gr.Warning("Processor not initialized or thresholds missing. Load data first.")
+                return current_state, gr.update() # No change
+            if json_file_obj is None:
+                gr.Warning("No JSON file provided.")
+                return current_state, gr.update() # No change
+
+            try:
+                # Read JSON file content
+                with open(json_file_obj.name, 'r') as f:
+                    json_data = json.load(f)
+
+                if not isinstance(json_data, dict):
+                    raise ValueError("JSON content must be a dictionary (object).")
+
+                # Get current thresholds DataFrame from state
+                updated_thresholds_df = current_state.class_thresholds.copy()
+                updated_thresholds_df.set_index('Class', inplace=True) # Set index for easy update
+
+                loaded_count = 0
+                warning_messages = []
+
+                # Update thresholds based on JSON data
+                for cls, threshold in json_data.items():
+                    if not isinstance(cls, str):
+                        warning_messages.append(f"Skipping non-string class key: {cls}")
+                        continue
+                    if not isinstance(threshold, (int, float)):
+                        warning_messages.append(f"Skipping non-numeric threshold for class '{cls}': {threshold}")
+                        continue
+                    
+                    # Validate and clip threshold value
+                    valid_threshold = float(threshold)
+                    clipped_threshold = max(0.01, min(0.99, valid_threshold))
+                    if clipped_threshold != valid_threshold:
+                         warning_messages.append(f"Threshold for '{cls}' ({valid_threshold}) clipped to {clipped_threshold}.")
+                         
+                    if cls in updated_thresholds_df.index:
+                        updated_thresholds_df.loc[cls, 'Threshold'] = clipped_threshold
+                        loaded_count += 1
+                    else:
+                        warning_messages.append(f"Class '{cls}' from JSON not found in loaded data.")
+
+                updated_thresholds_df.reset_index(inplace=True) # Reset index
+
+                # Show warnings if any
+                if warning_messages:
+                    gr.Warning("\n".join(warning_messages))
+
+                # Create new state with updated thresholds
+                new_state = ProcessorState(
+                    processor=current_state.processor,
+                    prediction_dir=current_state.prediction_dir,
+                    metadata_dir=current_state.metadata_dir,
+                    color_map=current_state.color_map,
+                    class_thresholds=updated_thresholds_df # Use the updated DataFrame
+                )
+                
+                gr.Info(f"Successfully loaded thresholds for {loaded_count} classes from JSON.")
+                # Return new state and update for the UI DataFrame
+                return new_state, gr.update(value=updated_thresholds_df)
+
+            except Exception as e:
+                gr.Error(f"Error loading thresholds from JSON: {e}")
+                # Return original state and no UI update on error
+                return current_state, gr.update()
+
+        # Add click handler for the Load JSON Thresholds button
+        load_json_thresholds_btn.click(
+            fn=load_thresholds_from_json,
+            inputs=[processor_state, json_threshold_upload],
+            outputs=[processor_state, class_thresholds_df] # Update state and the UI table
+        )
+
+        # Plot button action (Histogram - ignores class thresholds)
         plot_predictions_btn.click(
             fn=plot_predictions_action,
             inputs=[
                 processor_state,
                 select_classes_checkboxgroup,
                 select_recordings_checkboxgroup,
-                confidence_threshold,
                 date_range_start,
                 date_range_end,
                 time_start_hour,
@@ -994,7 +1178,7 @@ def build_visualization_tab():
             outputs=[processor_state, smooth_distribution_output]
         )
 
-        # Add click handler for map button
+        # Add click handler for map button (Uses class thresholds from state)
         plot_map_btn.click(
             fn=plot_spatial_distribution,
             inputs=[
@@ -1002,7 +1186,6 @@ def build_visualization_tab():
                 metadata_columns["X"],
                 metadata_columns["Y"],
                 metadata_columns["Site"],
-                confidence_threshold,
                 date_range_start,
                 date_range_end,
                 time_start_hour,
@@ -1010,10 +1193,10 @@ def build_visualization_tab():
                 time_end_hour,
                 time_end_minute,
             ],
-            outputs=[processor_state, map_output]  # Add processor_state as output
+            outputs=[processor_state, map_output]
         )
 
-        # Add click handler for time distribution button
+        # Add click handler for time distribution button (Uses class thresholds from state)
         plot_time_distribution_btn.click(
             fn=plot_time_distribution,
             inputs=[
@@ -1022,7 +1205,6 @@ def build_visualization_tab():
                 use_boxplot,
                 select_classes_checkboxgroup,
                 select_recordings_checkboxgroup,
-                confidence_threshold,
                 date_range_start,
                 date_range_end,
                 time_start_hour,
@@ -1033,12 +1215,11 @@ def build_visualization_tab():
             outputs=[time_distribution_output]
         )
 
-        # Handler function for calculate detections button
+        # Handler function for calculate detections button (Uses class thresholds from state)
         def calculate_detection_counts(
             proc_state: ProcessorState,
             selected_classes_list,
             selected_recordings_list,
-            confidence_threshold: float,
             date_range_start,
             date_range_end,
             time_start_hour,
@@ -1050,6 +1231,13 @@ def build_visualization_tab():
             if not proc_state or not proc_state.processor:
                 raise gr.Error("Please load predictions first")
                 
+            # Correctly check if thresholds DataFrame is None or empty
+            if proc_state.class_thresholds is None or proc_state.class_thresholds.empty:
+                raise gr.Error("Class thresholds not initialized or are empty. Load data and optionally JSON thresholds first.")
+                
+            # Validate thresholds from state
+            validated_thresholds_df = proc_state.class_thresholds
+                
             # Get data and apply filters
             df = proc_state.processor.get_data()
             if df.empty:
@@ -1057,6 +1245,7 @@ def build_visualization_tab():
                 
             # Apply class and recording filters
             col_class = proc_state.processor.get_column_name("Class")
+            conf_col = proc_state.processor.get_column_name("Confidence")
             if selected_classes_list:
                 df = df[df[col_class].isin(selected_classes_list)]
                 
@@ -1068,9 +1257,8 @@ def build_visualization_tab():
                 )
                 df = df[df["recording_filename"].isin(selected_recordings_list)]
                 
-            # Apply confidence threshold filter
-            conf_col = proc_state.processor.get_column_name("Confidence")
-            df = df[df[conf_col] >= confidence_threshold]
+            # Apply class-specific confidence thresholds using validated thresholds
+            df = apply_class_thresholds(df, validated_thresholds_df, col_class, conf_col)
             
             # Apply date and time filters
             df = apply_datetime_filters(
@@ -1115,7 +1303,6 @@ def build_visualization_tab():
                 processor_state,
                 select_classes_checkboxgroup,
                 select_recordings_checkboxgroup,
-                confidence_threshold,
                 date_range_start,
                 date_range_end,
                 time_start_hour,
