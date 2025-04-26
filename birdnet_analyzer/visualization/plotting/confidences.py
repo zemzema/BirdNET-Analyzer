@@ -40,6 +40,12 @@ class ConfidencePlotter:
         # Gather unique classes
         self.classes = sorted(self.data[self.class_col].dropna().unique())
 
+    def _get_color_map(self, classes: List[str]) -> Dict[str, str]:
+        """Create consistent color mapping for classes."""
+        base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
+        colors = base_colors * (1 + len(classes) // len(base_colors))
+        return {cls: colors[i] for i, cls in enumerate(sorted(classes))}
+
     def plot_ridgeline_matplotlib(
         self,
         figsize=(6, 8),
@@ -182,49 +188,60 @@ class ConfidencePlotter:
     ) -> go.Figure:
         """
         Creates a per-class histogram plot using Plotly.
-        Each class is plotted as an overlaid bar chart using exactly 10 bins and colors,
-        with the same style (legend position, margins, axis titles) as the smooth density plot.
+        Each class is plotted as a grouped bar chart using exactly 10 bins.
+        Each bin represents a 0.1-width range of confidence scores.
         """
-        classes = sorted(self.data[self.class_col].dropna().unique())
-        if not classes:
-            raise ValueError("Not enough data to plot.")
+        if self.data.empty:
+            raise ValueError("No data to plot")
         
-        # Use same base colors as for KDE
-        base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
-        colors = base_colors * (1 + len(classes) // len(base_colors))
-        color_map = {cls: colors[i] for i, cls in enumerate(classes)}
+        # Set up confidence bins (10 bins from 0 to 1)
+        x_title = 'Confidence Score'
+        bin_edges = np.linspace(0, 1, 11)  # 11 edges for 10 bins: 0, 0.1, 0.2, ..., 1.0
+        bin_labels = [f"≤ {edge:.1f}" for edge in bin_edges[1:]]  # 0.1, 0.2, ..., 1.0
         
+        # Create figure
         fig = go.Figure()
-        # Force exactly 10 bins
-        nbins = 10
+        classes = sorted(self.data[self.class_col].unique())
+        color_map = self._get_color_map(classes)
+        
+        # Plot histogram for each class
         for cls in classes:
-            class_data = self.data[self.data[self.class_col] == cls][self.conf_col].dropna()
-            if len(class_data) == 0:
+            cls_data = self.data[self.data[self.class_col] == cls]
+            
+            # Skip empty classes
+            if cls_data.empty:
                 continue
-            counts, bin_edges = np.histogram(class_data, bins=nbins)
-            # Compute the bin centers
-            x_vals = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+            
+            # Calculate histogram
+            counts, _ = np.histogram(cls_data[self.conf_col].dropna(), bins=bin_edges)
+            
+            # Add bar trace
             fig.add_trace(go.Bar(
-                x=x_vals,
-                y=counts,
                 name=str(cls),
+                x=bin_labels,
+                y=counts,
                 marker_color=color_map.get(cls),
                 opacity=0.6,
                 hovertemplate=(
-                    "Confidence: %{x:.2f}<br>"
+                    "Bin: %{x}<br>"
+                    "Species: " + str(cls) + "<br>"
                     "Count: %{y}<br>"
                     "<extra></extra>"
                 )
             ))
+        
+        # Update layout - exactly matching the TimeDistributionPlotter layout
         fig.update_layout(
-            barmode="overlay",
+            barmode='group',
             title=title,
-            xaxis_title="Confidence Score",
-            yaxis_title="Count",
-            legend_title="Class",
+            xaxis_title=x_title,
+            yaxis_title='Count',
+            legend_title='Species',
             legend=dict(x=1.02, y=1),
-            margin=dict(r=150)
+            margin=dict(r=150),
+            showlegend=True
         )
+        
         return fig
 
     def plot_smooth_distribution_plotly(

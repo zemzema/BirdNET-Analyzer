@@ -548,6 +548,7 @@ def build_visualization_tab():
     def plot_time_distribution(
         proc_state: ProcessorState,
         time_period: str,
+        use_boxplot: bool,
         selected_classes_list,
         selected_recordings_list,
         confidence_threshold: float,
@@ -604,7 +605,8 @@ def build_visualization_tab():
         try:
             fig = plotter.plot_distribution(
                 time_period=time_period,
-                title=f"Species Counts by {time_period.capitalize()}"
+                use_boxplot=use_boxplot,
+                title=f"Species {'Boxplots' if use_boxplot else 'Counts'} by {time_period.capitalize()}"
             )
             return gr.update(value=fig, visible=True)
         except Exception as e:
@@ -761,6 +763,11 @@ def build_visualization_tab():
                         label="Time Distribution Period",
                         info="Select period for time distribution plot"
                     )
+                    use_boxplot = gr.Checkbox(
+                        label="Use Box Plots",
+                        info="Show distribution as box plots instead of counts",
+                        value=False
+                    )
 
         # Action button and output for smooth distribution plot
         plot_predictions_btn = gr.Button(
@@ -903,6 +910,7 @@ def build_visualization_tab():
             inputs=[
                 processor_state,
                 time_distribution_period,
+                use_boxplot,
                 select_classes_checkboxgroup,
                 select_recordings_checkboxgroup,
                 confidence_threshold,
