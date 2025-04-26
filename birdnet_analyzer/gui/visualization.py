@@ -769,6 +769,20 @@ def build_visualization_tab():
                         value=False
                     )
 
+        # Warning message about model validation and interpretation
+        gr.Markdown(
+            """
+            <div style="background-color: #FFF3CD; color: #856404; padding: 10px; margin: 10px 0; 
+                      border-left: 5px solid #FFDD33; border-radius: 4px;">
+              <span style="font-weight: bold;">⚠️ Warning:</span> Visualizations should be interpreted with caution. 
+              Please verify model performance for your target species and environment before drawing conclusions. 
+              Confidence thresholds significantly affect detection rates - lower values increase detections but may 
+              introduce false positives. Temporal and spatial patterns may reflect recording methods rather than 
+              actual species behavior.
+            </div>
+            """
+        )
+
         # Action button and output for smooth distribution plot
         plot_predictions_btn = gr.Button(
             loc.localize("viz-tab-plot-distributions-button-label"), 
