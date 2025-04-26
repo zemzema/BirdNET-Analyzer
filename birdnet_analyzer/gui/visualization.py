@@ -793,6 +793,18 @@ def build_visualization_tab():
             visible=False
         )
 
+        # Add calculate detections button and output table
+        calculate_detections_btn = gr.Button(
+            "Calculate Detections", 
+            variant="huggingface"
+        )
+        detections_table = gr.DataFrame(
+            show_label=False,
+            type="pandas",
+            visible=False,
+            interactive=False
+        )
+
         # Interactions
         def get_selection_func(state_key, on_select):
             def select_directory_on_empty():
@@ -922,6 +934,99 @@ def build_visualization_tab():
                 time_end_minute,
             ],
             outputs=[time_distribution_output]
+        )
+
+        # Handler function for calculate detections button
+        def calculate_detection_counts(
+            proc_state: ProcessorState,
+            selected_classes_list,
+            selected_recordings_list,
+            confidence_threshold: float,
+            date_range_start,
+            date_range_end,
+            time_start_hour,
+            time_start_minute,
+            time_end_hour,
+            time_end_minute,
+        ):
+            """Count detections for each class with the applied filters."""
+            if not proc_state or not proc_state.processor:
+                raise gr.Error("Please load predictions first")
+                
+            # Get data and apply filters
+            df = proc_state.processor.get_data()
+            if df.empty:
+                raise gr.Error("No predictions to analyze")
+                
+            # Apply class and recording filters
+            col_class = proc_state.processor.get_column_name("Class")
+            if selected_classes_list:
+                df = df[df[col_class].isin(selected_classes_list)]
+                
+            if selected_recordings_list:
+                selected_recordings_list = [rec.lower() for rec in selected_recordings_list]
+                df["recording_filename"] = df["recording_filename"].apply(
+                    lambda x: os.path.splitext(os.path.basename(x.strip()))[0].lower() 
+                    if isinstance(x, str) else x
+                )
+                df = df[df["recording_filename"].isin(selected_recordings_list)]
+                
+            # Apply confidence threshold filter
+            conf_col = proc_state.processor.get_column_name("Confidence")
+            df = df[df[conf_col] >= confidence_threshold]
+            
+            # Apply date and time filters
+            df = apply_datetime_filters(
+                df, 
+                date_range_start, 
+                date_range_end,
+                time_start_hour,
+                time_start_minute,
+                time_end_hour,
+                time_end_minute
+            )
+            
+            if df.empty:
+                raise gr.Error("No data matches the selected filters")
+                
+            # Count detections by class
+            class_counts = df[col_class].value_counts().reset_index()
+            class_counts.columns = ["Species", "Detections"]
+            
+            # Add percentage column
+            total = class_counts["Detections"].sum()
+            class_counts["Percentage"] = (class_counts["Detections"] / total * 100).round(1).astype(str) + "%"
+            
+            # Sort by detection count (descending)
+            class_counts = class_counts.sort_values("Detections", ascending=False)
+            
+            # Add total row
+            total_row = pd.DataFrame({
+                "Species": ["Total"],
+                "Detections": [total],
+                "Percentage": ["100.0%"]
+            })
+            
+            result_df = pd.concat([class_counts, total_row])
+            
+            return gr.update(value=result_df, visible=True)
+            
+        # Add click handler for calculate detections button
+        calculate_detections_btn.click(
+            fn=calculate_detection_counts,
+            inputs=[
+                processor_state,
+                select_classes_checkboxgroup,
+                select_recordings_checkboxgroup,
+                confidence_threshold,
+                date_range_start,
+                date_range_end,
+                time_start_hour,
+                time_start_minute,
+                time_end_hour,
+                time_end_minute,
+            ],
+            outputs=[detections_table]
         )
 
 
