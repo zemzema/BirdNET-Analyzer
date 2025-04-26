@@ -457,6 +457,11 @@ def build_visualization_tab():
             metadata_df['latitude'] = pd.to_numeric(metadata_df[meta_x], errors='coerce')
             metadata_df['longitude'] = pd.to_numeric(metadata_df[meta_y], errors='coerce')
             
+            # Store all unique locations from metadata before filtering
+            all_locations_df = metadata_df.copy()
+            all_locations_df = all_locations_df.rename(columns={meta_site: 'site_name'})
+            all_locations_df = all_locations_df[['site_name', 'latitude', 'longitude']].drop_duplicates()
+            
             # Set metadata into processor
             proc_state.processor.set_metadata(metadata_df, site_col=meta_site, lat_col='latitude', lon_col='longitude')
             
@@ -478,24 +483,74 @@ def build_visualization_tab():
                 time_end_minute
             )
             
-            if df.empty:
-                raise gr.Error("No predictions match the selected filters.")
-            
             class_col = proc_state.processor.get_column_name("Class")
             # Ensure that latitude and longitude exist in the data after merge
             for col in ['latitude', 'longitude']:
                 if col not in df.columns:
                     raise gr.Error(f"Column '{col}' is missing after merging metadata.")
             
+            # Create aggregated dataframe with counts by location and class
             agg_df = df.groupby(['site_name', 'latitude', 'longitude', class_col]).size().reset_index(name='count')
+            
+            # Create or retrieve color map for consistency with other plots
+            all_classes = sorted(df[class_col].unique())
+            color_map = {}
+            
+            # Use existing color map from state if available
+            if proc_state.color_map:
+                color_map = proc_state.color_map.copy()
+                # Add any new classes that aren't in the existing map
+                base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
+                next_color_idx = len(color_map)
+                for cls in all_classes:
+                    if cls not in color_map:
+                        color_map[cls] = base_colors[next_color_idx % len(base_colors)]
+                        next_color_idx += 1
+            else:
+                # Create new color map using same method as ConfidencePlotter
+                base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
+                colors = base_colors * (1 + len(all_classes) // len(base_colors))
+                color_map = {cls: colors[i] for i, cls in enumerate(all_classes)}
+                
+            # Special case for empty results
             if agg_df.empty:
-                raise gr.Error("No predictions with valid locations found")
+                # If no detections match filters, still show the locations
+                agg_df = all_locations_df.copy()
+                agg_df[class_col] = "No Detections"
+                agg_df['count'] = 0
+            else:
+                # Find locations with no detections in the filtered dataset
+                active_locations = set(agg_df[['site_name', 'latitude', 'longitude']].itertuples(index=False, name=None))
+                all_locations = set(all_locations_df.itertuples(index=False, name=None))
+                missing_locations = all_locations - active_locations
+                
+                # Create DataFrame for locations with no detections
+                if missing_locations:
+                    missing_df = pd.DataFrame(list(missing_locations), columns=['site_name', 'latitude', 'longitude'])
+                    missing_df[class_col] = "No Detections"
+                    missing_df['count'] = 0
+                    
+                    # Combine with aggregated data
+                    agg_df = pd.concat([agg_df, missing_df], ignore_index=True)
             
+            # Always add "No Detections" to the color map
+            color_map["No Detections"] = 'black'
+            
+            # Update the processor state with the color map for future consistency
+            new_state = ProcessorState(
+                processor=proc_state.processor,
+                prediction_dir=proc_state.prediction_dir,
+                metadata_dir=proc_state.metadata_dir,
+                color_map=color_map
+            )
+            
+            # Get sorted classes for category order, with "No Detections" first
             sorted_classes = sorted(agg_df[class_col].unique())
-            base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
-            colors = base_colors * (1 + len(sorted_classes) // len(base_colors))
-            color_map = {cls: colors[i] for i, cls in enumerate(sorted_classes)}
+            if "No Detections" in sorted_classes:
+                sorted_classes.remove("No Detections")
+                sorted_classes = ["No Detections"] + sorted_classes
             
+            # Create the scatter mapbox plot
             fig = px.scatter_mapbox(
                 agg_df,
                 lat='latitude',
@@ -510,10 +565,27 @@ def build_visualization_tab():
                 height=600,
                 title="Spatial Distribution of Predictions by Class"
             )
-            max_count = max(agg_df['count'])
-            size_scale = 50
-            sizeref = 2.0 * max_count / (size_scale**2)
-            fig.update_traces(marker=dict(sizemin=3, sizemode='area', sizeref=sizeref, opacity=0.8))
+            
+            # Adjust marker sizes - special case for "No Detections"
+            for i, trace in enumerate(fig.data):
+                if trace.name == "No Detections":
+                    # Set fixed small size for "No Detections" markers
+                    fig.data[i].marker.size = 8
+                    fig.data[i].marker.sizemode = "diameter"
+                    fig.data[i].marker.sizeref = 1
+                    fig.data[i].marker.sizemin = 8
+                else:
+                    # Scale other markers by detection count
+                    max_count = max(agg_df['count']) if len(agg_df[agg_df['count'] > 0]) > 0 else 1
+                    size_scale = 50
+                    sizeref = 2.0 * max_count / (size_scale**2)
+                    fig.data[i].marker.sizeref = sizeref
+                    fig.data[i].marker.sizemin = 5
+                    fig.data[i].marker.sizemode = 'area'
+                
+                # Set opacity for all markers
+                fig.data[i].marker.opacity = 0.8
+            
             fig.update_layout(
                 mapbox_style='open-street-map',
                 margin={"r":0,"t":30,"l":0,"b":0},
@@ -532,16 +604,27 @@ def build_visualization_tab():
                 margin_pad=10,  # Add some padding
                 margin_t=50     # Add top margin for modebar
             )
-            fig.update_traces(
-                hovertemplate=(
-                    "Site: %{customdata[0]}<br>"
-                    "Count: %{customdata[1]}<br>"
-                    "Latitude: %{lat:.2f}<br>"
-                    "Longitude: %{lon:.2f}<br>"
-                    "<extra></extra>"
-                )
-            )
-            return gr.update(value=fig, visible=True)
+            
+            # Update hover template based on whether it's a "No Detections" point
+            for i, trace in enumerate(fig.data):
+                if trace.name == "No Detections":
+                    fig.data[i].hovertemplate = (
+                        "Site: %{customdata[0]}<br>"
+                        "Status: No Detections<br>"
+                        "Latitude: %{lat:.2f}<br>"
+                        "Longitude: %{lon:.2f}<br>"
+                        "<extra></extra>"
+                    )
+                else:
+                    fig.data[i].hovertemplate = (
+                        "Site: %{customdata[0]}<br>"
+                        "Count: %{customdata[1]}<br>"
+                        "Latitude: %{lat:.2f}<br>"
+                        "Longitude: %{lon:.2f}<br>"
+                        "<extra></extra>"
+                    )
+            
+            return [new_state, gr.update(value=fig, visible=True)]
         except Exception as e:
             raise gr.Error(f"Error creating map: {str(e)}")
 
@@ -927,7 +1010,7 @@ def build_visualization_tab():
                 time_end_hour,
                 time_end_minute,
             ],
-            outputs=[map_output]
+            outputs=[processor_state, map_output]  # Add processor_state as output
         )
 
         # Add click handler for time distribution button
