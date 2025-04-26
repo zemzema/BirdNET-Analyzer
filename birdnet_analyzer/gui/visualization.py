@@ -16,7 +16,7 @@ import birdnet_analyzer.gui.localization as loc
 import birdnet_analyzer.gui.utils as gu
 from birdnet_analyzer.visualization.data_processor import DataProcessor
 from birdnet_analyzer.visualization.plotting.confidences import ConfidencePlotter
-from birdnet_analyzer.visualization.utils.coordinates import process_coordinates
+from birdnet_analyzer.visualization.plotting.time_distributions import TimeDistributionPlotter
 
 
 class ProcessorState(typing.NamedTuple):
@@ -122,16 +122,15 @@ def build_visualization_tab():
         "Start Time": "Begin Time (s)",
         "End Time": "End Time (s)",
         "Class": "Common Name",
-        "Recording": "Begin File",
+        "Recording": "Begin Path",
         "Confidence": "Confidence",
     }
 
     # Default columns for metadata
     metadata_default_columns = {
         "Site": "Site",
-        "Country": "country",
-        "X": "N",
-        "Y": "W",
+        "X": "lat",
+        "Y": "lon",
     }
 
     localized_column_labels = {
@@ -141,9 +140,8 @@ def build_visualization_tab():
         "Recording": loc.localize("eval-tab-column-recording-label"),
         "Confidence": loc.localize("eval-tab-column-confidence-label"),
         "Site": loc.localize("viz-tab-column-site-label"),
-        "Country": loc.localize("viz-tab-column-country-label"),
-        "X": loc.localize("viz-tab-column-x-label"),
-        "Y": loc.localize("viz-tab-column-y-label"),
+        "X": loc.localize("viz-tab-column-latitude-label"),
+        "Y": loc.localize("viz-tab-column-longitude-label"),
     }
 
     def get_columns_from_uploaded_files(files):
@@ -279,7 +277,7 @@ def build_visualization_tab():
         
         cols = [""] + sorted(list(cols))
         updates = []
-        for label in ["Site", "Country", "X", "Y"]:
+        for label in ["Site", "X", "Y"]:
             default_val = metadata_default_columns.get(label)
             val = default_val if default_val in cols else None
             updates.append(gr.update(choices=cols, value=val))
@@ -294,10 +292,8 @@ def build_visualization_tab():
         pred_confidence,
         pred_recording,
         meta_site,
-        meta_country,
         meta_x,
         meta_y,
-        coordinate_format,
         current_classes,
         current_recordings,
     ):
@@ -431,10 +427,8 @@ def build_visualization_tab():
 
     def plot_spatial_distribution(
         proc_state: ProcessorState,
-        meta_country,
         meta_x,
         meta_y,
-        coordinate_format,
         meta_site,
         confidence_threshold: float,
         date_range_start,
@@ -455,21 +449,13 @@ def build_visualization_tab():
                 raise gr.Error("No metadata files found")
             metadata_df = pd.read_csv(meta_files[0])
             
-            if coordinate_format != "UTM":
-                # Ensure expected source columns exist
-                if meta_x not in metadata_df.columns or meta_y not in metadata_df.columns:
-                    raise gr.Error("Metadata file missing expected coordinate columns.")
-                # Convert columns and create standardized 'latitude' and 'longitude'
-                metadata_df = metadata_df.copy()
-                metadata_df['latitude'] = pd.to_numeric(metadata_df[meta_x], errors='coerce')
-                metadata_df['longitude'] = pd.to_numeric(metadata_df[meta_y], errors='coerce')
-            else:
-                metadata_df = process_coordinates(
-                    metadata_df,
-                    country_col=meta_country,
-                    easting_col=meta_x,
-                    northing_col=meta_y
-                )
+            # Ensure expected source columns exist
+            if meta_x not in metadata_df.columns or meta_y not in metadata_df.columns:
+                raise gr.Error("Metadata file missing expected coordinate columns.")
+            # Convert columns and create standardized 'latitude' and 'longitude'
+            metadata_df = metadata_df.copy()
+            metadata_df['latitude'] = pd.to_numeric(metadata_df[meta_x], errors='coerce')
+            metadata_df['longitude'] = pd.to_numeric(metadata_df[meta_y], errors='coerce')
             
             # Set metadata into processor
             proc_state.processor.set_metadata(metadata_df, site_col=meta_site, lat_col='latitude', lon_col='longitude')
@@ -533,7 +519,18 @@ def build_visualization_tab():
                 margin={"r":0,"t":30,"l":0,"b":0},
                 legend_title="Class",
                 showlegend=True,
-                mapbox=dict(center=dict(lat=agg_df['latitude'].mean(), lon=agg_df['longitude'].mean()), zoom=10)
+                mapbox=dict(center=dict(lat=agg_df['latitude'].mean(), lon=agg_df['longitude'].mean()), zoom=10),
+                modebar=dict(
+                    orientation='h',  # Horizontal orientation
+                    bgcolor='rgba(255, 255, 255, 0.8)',
+                    color='#333333',
+                    activecolor='#FF4B4B'
+                ),
+                modebar_add=[
+                    'zoom', 'zoomIn', 'zoomOut', 'resetViews'
+                ],
+                margin_pad=10,  # Add some padding
+                margin_t=50     # Add top margin for modebar
             )
             fig.update_traces(
                 hovertemplate=(
@@ -547,6 +544,71 @@ def build_visualization_tab():
             return gr.update(value=fig, visible=True)
         except Exception as e:
             raise gr.Error(f"Error creating map: {str(e)}")
+
+    def plot_time_distribution(
+        proc_state: ProcessorState,
+        time_period: str,
+        selected_classes_list,
+        selected_recordings_list,
+        confidence_threshold: float,
+        date_range_start,
+        date_range_end,
+        time_start_hour,
+        time_start_minute,
+        time_end_hour,
+        time_end_minute,
+    ):
+        """Creates time distribution plot with all filters applied."""
+        if not proc_state or not proc_state.processor:
+            raise gr.Error("Please load predictions first")
+            
+        # Get data and apply all filters
+        df = proc_state.processor.get_data()
+        
+        # Apply class and recording filters
+        col_class = proc_state.processor.get_column_name("Class")
+        if selected_classes_list:
+            df = df[df[col_class].isin(selected_classes_list)]
+        if selected_recordings_list:
+            selected_recordings_list = [rec.lower() for rec in selected_recordings_list]
+            df["recording_filename"] = df["recording_filename"].apply(
+                lambda x: os.path.splitext(os.path.basename(x.strip()))[0].lower() 
+                if isinstance(x, str) else x
+            )
+            df = df[df["recording_filename"].isin(selected_recordings_list)]
+            
+        # Apply confidence threshold
+        conf_col = proc_state.processor.get_column_name("Confidence")
+        df = df[df[conf_col] >= confidence_threshold]
+        
+        # Apply date and time filters
+        df = apply_datetime_filters(
+            df, 
+            date_range_start, 
+            date_range_end,
+            time_start_hour,
+            time_start_minute,
+            time_end_hour,
+            time_end_minute
+        )
+        
+        if df.empty:
+            raise gr.Error("No data matches the selected filters")
+            
+        # Create plotter and generate plot
+        plotter = TimeDistributionPlotter(
+            data=df,
+            class_col=col_class
+        )
+        
+        try:
+            fig = plotter.plot_distribution(
+                time_period=time_period,
+                title=f"Species Counts by {time_period.capitalize()}"
+            )
+            return gr.update(value=fig, visible=True)
+        except Exception as e:
+            raise gr.Error(f"Error creating time distribution plot: {str(e)}")
 
     def get_selection_tables(directory):
         """Reads prediction txt files and metadata csv files from directory."""
@@ -601,21 +663,13 @@ def build_visualization_tab():
             with gr.Accordion(loc.localize("viz-tab-metadata-col-accordion-label"), open=True):
                 with gr.Row():
                     metadata_columns: dict[str, gr.Dropdown] = {}
-                    for col in ["Site", "Country", "X", "Y"]:
+                    for col in ["Site", "X", "Y"]:
                         label = localized_column_labels[col]
                         if col == "X":
-                            label += " (Longitude/Easting)"
+                            label += " (Decimal Degrees)"
                         elif col == "Y":
-                            label += " (Latitude/Northing)"
+                            label += " (Decimal Degrees)"
                         metadata_columns[col] = gr.Dropdown(choices=[], label=label)
-                
-                with gr.Row():
-                    coordinate_format = gr.Radio(
-                        choices=["GCS", "UTM"],
-                        value="GCS",
-                        label=loc.localize("viz-tab-coordinate-format-label"),
-                        info=loc.localize("viz-tab-coordinate-format-info")
-                    )
 
         # Class and Recording Selection Box
         with gr.Group(visible=True) as class_recording_group:
@@ -700,6 +754,14 @@ def build_visualization_tab():
                                 interactive=True
                             )
 
+                with gr.Row():
+                    time_distribution_period = gr.Dropdown(
+                        choices=["hour", "day", "month", "year"],
+                        value="hour",
+                        label="Time Distribution Period",
+                        info="Select period for time distribution plot"
+                    )
+
         # Action button and output for smooth distribution plot
         plot_predictions_btn = gr.Button(
             loc.localize("viz-tab-plot-distributions-button-label"), 
@@ -713,6 +775,16 @@ def build_visualization_tab():
             variant="huggingface"
         )
         map_output = gr.Plot(label=loc.localize("viz-tab-map-plot-label"), visible=False)
+
+        # Add plot time distribution button after existing plot buttons
+        plot_time_distribution_btn = gr.Button(
+            "Plot Time Distribution", 
+            variant="huggingface"
+        )
+        time_distribution_output = gr.Plot(
+            label="Time Distribution Plot",
+            visible=False
+        )
 
         # Interactions
         def get_selection_func(state_key, on_select):
@@ -739,7 +811,6 @@ def build_visualization_tab():
                 metadata_directory_input,
                 metadata_group,
                 metadata_columns["Site"],
-                metadata_columns["Country"], 
                 metadata_columns["X"],
                 metadata_columns["Y"]
             ],
@@ -754,7 +825,7 @@ def build_visualization_tab():
         )
 
         # Update processor and selections when columns change
-        for comp in list(prediction_columns.values()) + list(metadata_columns.values()) + [coordinate_format]:
+        for comp in list(prediction_columns.values()) + list(metadata_columns.values()):
             comp.change(
                 fn=update_selections,
                 inputs=[
@@ -766,10 +837,8 @@ def build_visualization_tab():
                     prediction_columns["Confidence"],
                     prediction_columns["Recording"],
                     metadata_columns["Site"],
-                    metadata_columns["Country"],
                     metadata_columns["X"],
                     metadata_columns["Y"],
-                    coordinate_format,
                     select_classes_checkboxgroup,
                     select_recordings_checkboxgroup,
                 ],
@@ -814,10 +883,8 @@ def build_visualization_tab():
             fn=plot_spatial_distribution,
             inputs=[
                 processor_state,
-                metadata_columns["Country"],
                 metadata_columns["X"],
                 metadata_columns["Y"],
-                coordinate_format,
                 metadata_columns["Site"],
                 confidence_threshold,
                 date_range_start,
@@ -828,6 +895,25 @@ def build_visualization_tab():
                 time_end_minute,
             ],
             outputs=[map_output]
+        )
+
+        # Add click handler for time distribution button
+        plot_time_distribution_btn.click(
+            fn=plot_time_distribution,
+            inputs=[
+                processor_state,
+                time_distribution_period,
+                select_classes_checkboxgroup,
+                select_recordings_checkboxgroup,
+                confidence_threshold,
+                date_range_start,
+                date_range_end,
+                time_start_hour,
+                time_start_minute,
+                time_end_hour,
+                time_end_minute,
+            ],
+            outputs=[time_distribution_output]
         )
 
 

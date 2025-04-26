@@ -243,6 +243,26 @@ class DataProcessor:
                 if pd.notnull(row['recording_datetime']) else None,
                 axis=1
             )
+            
+            # Extract additional time components
+            # Extract date components
+            df['year'] = df['prediction_time'].dt.year.astype('Int64')  # Use Int64 for integer type with NA support
+            df['month'] = df['prediction_time'].dt.month
+            df['month_name'] = df['prediction_time'].dt.strftime('%B')  # Full month name
+            df['day'] = df['prediction_time'].dt.day
+            df['weekday'] = df['prediction_time'].dt.weekday  # Monday=0, Sunday=6
+            df['weekday_name'] = df['prediction_time'].dt.strftime('%A')  # Full weekday name
+            
+            # Extract time components
+            df['hour'] = df['prediction_time'].dt.hour
+            df['minute'] = df['prediction_time'].dt.minute
+            df['second'] = df['prediction_time'].dt.second
+            
+            # Add time period indicators
+            df['is_weekend'] = df['weekday'].isin([5, 6])  # Saturday=5, Sunday=6
+            df['day_period'] = pd.cut(df['hour'], 
+                                    bins=[-1, 5, 11, 16, 21, 24],
+                                    labels=['Night', 'Morning', 'Midday', 'Afternoon', 'Evening'])
         
         # Add metadata information
         df = self._add_metadata_info(df)
@@ -255,23 +275,43 @@ class DataProcessor:
                      lon_col: str = 'Longitude') -> None:
         """
         Sets the metadata DataFrame with standardized column names and merges it with predictions_df.
+        
+        Args:
+            metadata_df: DataFrame containing site metadata
+            site_col: Name of the site identifier column
+            lat_col: Name of the latitude column (decimal degrees)
+            lon_col: Name of the longitude column (decimal degrees)
         """
         # Ensure required columns exist
         for col in [site_col, lat_col, lon_col]:
             if col not in metadata_df.columns:
                 raise ValueError(f"Missing column '{col}' in metadata.")
+
         self.metadata_df = metadata_df.copy()
+        
         # Standardize column names
         mapping = {site_col: 'site_name', lat_col: 'latitude', lon_col: 'longitude'}
         self.metadata_df.rename(columns=mapping, inplace=True)
+        
+        # Convert coordinates to numeric and validate ranges
         self.metadata_df['latitude'] = pd.to_numeric(self.metadata_df['latitude'], errors='coerce')
         self.metadata_df['longitude'] = pd.to_numeric(self.metadata_df['longitude'], errors='coerce')
-        # Unconditionally merge metadata into predictions and store as merged_df:
+        
+        # Validate coordinate ranges
+        invalid_lat = ~self.metadata_df['latitude'].between(-90, 90)
+        invalid_lon = ~self.metadata_df['longitude'].between(-180, 180)
+        
+        if invalid_lat.any() or invalid_lon.any():
+            raise ValueError("Invalid coordinates found. Latitude must be between -90 and 90, Longitude between -180 and 180.")
+            
+        # Merge metadata into predictions
         merged = self.predictions_df.copy()
         merged["latitude"] = merged["site_name"].map(self.metadata_df.set_index("site_name")["latitude"])
         merged["longitude"] = merged["site_name"].map(self.metadata_df.set_index("site_name")["longitude"])
+        
         if merged["latitude"].isnull().all():
             raise ValueError("All latitude values are missing after merging metadata.")
+        
         self.merged_df = merged.copy()
 
     def get_column_name(self, field_name: str, prediction: bool = True) -> str:
