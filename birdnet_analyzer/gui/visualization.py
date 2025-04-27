@@ -354,8 +354,8 @@ def build_visualization_tab():
         # Initialize class thresholds DataFrame
         class_thresholds_init_df = None
         threshold_df_update = gr.update(visible=False, value=None) # Default to hidden
-        json_file_upload_update = gr.update(visible=False) # Add visibility for JSON upload
-        json_load_btn_update = gr.update(visible=False) # Add visibility for JSON load button
+        threshold_json_btn_update = gr.update(visible=False) # Update for JSON select button
+        threshold_download_btn_update = gr.update(visible=False) # Update for download button
         
         if proc:
             # Create DataFrame for thresholds
@@ -364,8 +364,8 @@ def build_visualization_tab():
                 'Threshold': [0.10] * len(avail_classes) # Default threshold
             })
             threshold_df_update = gr.update(visible=True, value=class_thresholds_init_df)
-            json_file_upload_update = gr.update(visible=True) # Make JSON upload visible
-            json_load_btn_update = gr.update(visible=True) # Make JSON load button visible
+            threshold_json_btn_update = gr.update(visible=True) # Make JSON select button visible
+            threshold_download_btn_update = gr.update(visible=True) # Make download button visible
 
             state = ProcessorState(
                 processor=proc, 
@@ -398,8 +398,8 @@ def build_visualization_tab():
             gr.update(choices=avail_recordings, value=new_recordings),
             state,
             threshold_df_update, # Return update for the DataFrame UI
-            json_file_upload_update, # Return update for JSON upload visibility
-            json_load_btn_update # Return update for JSON load button visibility
+            threshold_json_btn_update, # Return update for JSON select button
+            threshold_download_btn_update # Return update for download button
         )
 
     def update_datetime_defaults(processor_state):
@@ -776,6 +776,109 @@ def build_visualization_tab():
         files = list(directory.glob("*.txt")) + list(directory.glob("*.csv"))
         return files
 
+    def download_threshold_template(proc_state: ProcessorState):
+        """Saves the current threshold table as a JSON file template."""
+        if not proc_state or proc_state.class_thresholds is None or proc_state.class_thresholds.empty:
+            raise gr.Error("No thresholds available to save. Load data first.")
+        
+        try:
+            thresholds_dict = {}
+            for _, row in proc_state.class_thresholds.iterrows():
+                thresholds_dict[row['Class']] = float(row['Threshold'])
+            
+            file_location = gu.save_file_dialog(
+                state_key="viz-threshold-template",
+                filetypes=("JSON (*.json)",),
+                default_filename="threshold_template.json",
+            )
+            
+            if file_location:
+                with open(file_location, "w") as f:
+                    json.dump(thresholds_dict, f, indent=4)
+                
+                gr.Info("Threshold template saved successfully")
+        except Exception as e:
+            print(f"Error saving threshold template: {e}")
+            raise gr.Error(f"Error saving threshold template: {e}")
+
+    def select_threshold_json_file(proc_state: ProcessorState):
+        """Opens a file dialog to select a JSON threshold file and loads its contents."""
+        if not proc_state or not proc_state.processor:
+            gr.Warning("Processor not initialized. Load data first.")
+            return proc_state, gr.update()
+        
+        try:
+            # Call select_file - ensure filetypes is a tuple of strings
+            file_path = gu.select_file(
+                filetypes=('JSON files (*.json)', 'All files (*.*)'), # Corrected format
+                state_key="viz-threshold-json"
+            )
+            
+            if not file_path:
+                # User canceled or no file selected (file_path is None or empty string)
+                return proc_state, gr.update()
+                
+            # Ensure file_path is a string before opening
+            if not isinstance(file_path, str):
+                 # This case should ideally not happen if gu.select_file works correctly
+                 raise TypeError(f"Expected a file path string, but got {type(file_path)}")
+
+            with open(file_path, 'r') as f:
+                json_data = json.load(f)
+
+            if not isinstance(json_data, dict):
+                raise ValueError("JSON content must be a dictionary (object).")
+
+            if proc_state.class_thresholds is None or proc_state.class_thresholds.empty:
+                gr.Warning("Class thresholds not initialized. Cannot update.")
+                return proc_state, gr.update()
+
+            updated_thresholds_df = proc_state.class_thresholds.copy()
+            updated_thresholds_df.set_index('Class', inplace=True)
+
+            loaded_count = 0
+            warning_messages = []
+
+            for cls, threshold in json_data.items():
+                if not isinstance(cls, str):
+                    warning_messages.append(f"Skipping non-string class key: {cls}")
+                    continue
+                if not isinstance(threshold, (int, float)):
+                    warning_messages.append(f"Skipping non-numeric threshold for class '{cls}': {threshold}")
+                    continue
+                
+                valid_threshold = float(threshold)
+                clipped_threshold = max(0.01, min(0.99, valid_threshold))
+                if clipped_threshold != valid_threshold:
+                    warning_messages.append(f"Threshold for '{cls}' ({valid_threshold}) clipped to {clipped_threshold}.")
+                    
+                if cls in updated_thresholds_df.index:
+                    updated_thresholds_df.loc[cls, 'Threshold'] = clipped_threshold
+                    loaded_count += 1
+                else:
+                    warning_messages.append(f"Class '{cls}' from JSON not found in loaded data.")
+
+            updated_thresholds_df.reset_index(inplace=True)
+
+            if warning_messages:
+                gr.Warning("\n".join(warning_messages))
+
+            new_state = ProcessorState(
+                processor=proc_state.processor,
+                prediction_dir=proc_state.prediction_dir,
+                metadata_dir=proc_state.metadata_dir,
+                color_map=proc_state.color_map,
+                class_thresholds=updated_thresholds_df
+            )
+            
+            gr.Info(f"Successfully loaded thresholds for {loaded_count} classes from JSON.")
+            return new_state, gr.update(value=updated_thresholds_df)
+            
+        except Exception as e:
+            print(f"Error loading thresholds from JSON: {e}")
+            gr.Error(f"Error loading thresholds from JSON: {str(e)}")
+            return proc_state, gr.update()
+
     with gr.Tab(loc.localize("visualization-tab-title")):
         gr.Markdown(
             """
@@ -784,7 +887,6 @@ def build_visualization_tab():
                 display: grid;
                 grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
                 grid-gap: 8px;
-            }
             </style>
             """
         )
@@ -916,7 +1018,7 @@ def build_visualization_tab():
                         value=False
                     )
                 
-                # Threshold components moved back inside this Accordion
+                # Threshold components 
                 with gr.Row():
                      class_thresholds_df = gr.DataFrame(
                          headers=["Class", "Threshold"],
@@ -926,19 +1028,19 @@ def build_visualization_tab():
                          visible=False,
                          col_count=(2, "fixed")
                      )
-                # Add JSON Upload components
+                # Replace JSON Upload with Select JSON button and add Download button
                 with gr.Row():
-                    json_threshold_upload = gr.File(
-                        label="Load Thresholds from JSON",
-                        file_types=[".json"],
-                        visible=False,
-                        scale=3 # Give file upload more space
-                    )
-                    load_json_thresholds_btn = gr.Button(
-                        "Load JSON",
+                    threshold_json_select_btn = gr.Button(
+                        "Select Threshold JSON File",
                         variant="secondary",
                         visible=False,
-                        scale=1 # Smaller button
+                        scale=2
+                    )
+                    threshold_template_download_btn = gr.Button(
+                        "Download Threshold Template",
+                        variant="secondary",
+                        visible=False,
+                        scale=2
                     )
 
         # Warning message about model validation and interpretation
@@ -1066,8 +1168,8 @@ def build_visualization_tab():
                     select_recordings_checkboxgroup,
                     processor_state,
                     class_thresholds_df, # Output to update the DataFrame UI
-                    json_threshold_upload, # Add output for JSON upload visibility
-                    load_json_thresholds_btn # Add output for JSON load button visibility
+                    threshold_json_select_btn, # Update for JSON select button
+                    threshold_template_download_btn # Update for download button
                 ],
                 # Trigger date updates only on success of processor update
             ).success(
@@ -1083,82 +1185,17 @@ def build_visualization_tab():
                 ]
             )
 
-        # Function to load thresholds from JSON file
-        def load_thresholds_from_json(current_state: ProcessorState, json_file_obj) -> typing.Tuple[ProcessorState, pd.DataFrame]:
-            """Loads thresholds from a JSON file, updates state, and refreshes the UI DataFrame."""
-            # Correctly check if state exists and if the thresholds DataFrame is None or empty
-            if not current_state or current_state.class_thresholds is None or current_state.class_thresholds.empty:
-                gr.Warning("Processor not initialized or thresholds missing. Load data first.")
-                return current_state, gr.update() # No change
-            if json_file_obj is None:
-                gr.Warning("No JSON file provided.")
-                return current_state, gr.update() # No change
-
-            try:
-                # Read JSON file content
-                with open(json_file_obj.name, 'r') as f:
-                    json_data = json.load(f)
-
-                if not isinstance(json_data, dict):
-                    raise ValueError("JSON content must be a dictionary (object).")
-
-                # Get current thresholds DataFrame from state
-                updated_thresholds_df = current_state.class_thresholds.copy()
-                updated_thresholds_df.set_index('Class', inplace=True) # Set index for easy update
-
-                loaded_count = 0
-                warning_messages = []
-
-                # Update thresholds based on JSON data
-                for cls, threshold in json_data.items():
-                    if not isinstance(cls, str):
-                        warning_messages.append(f"Skipping non-string class key: {cls}")
-                        continue
-                    if not isinstance(threshold, (int, float)):
-                        warning_messages.append(f"Skipping non-numeric threshold for class '{cls}': {threshold}")
-                        continue
-                    
-                    # Validate and clip threshold value
-                    valid_threshold = float(threshold)
-                    clipped_threshold = max(0.01, min(0.99, valid_threshold))
-                    if clipped_threshold != valid_threshold:
-                         warning_messages.append(f"Threshold for '{cls}' ({valid_threshold}) clipped to {clipped_threshold}.")
-                         
-                    if cls in updated_thresholds_df.index:
-                        updated_thresholds_df.loc[cls, 'Threshold'] = clipped_threshold
-                        loaded_count += 1
-                    else:
-                        warning_messages.append(f"Class '{cls}' from JSON not found in loaded data.")
-
-                updated_thresholds_df.reset_index(inplace=True) # Reset index
-
-                # Show warnings if any
-                if warning_messages:
-                    gr.Warning("\n".join(warning_messages))
-
-                # Create new state with updated thresholds
-                new_state = ProcessorState(
-                    processor=current_state.processor,
-                    prediction_dir=current_state.prediction_dir,
-                    metadata_dir=current_state.metadata_dir,
-                    color_map=current_state.color_map,
-                    class_thresholds=updated_thresholds_df # Use the updated DataFrame
-                )
-                
-                gr.Info(f"Successfully loaded thresholds for {loaded_count} classes from JSON.")
-                # Return new state and update for the UI DataFrame
-                return new_state, gr.update(value=updated_thresholds_df)
-
-            except Exception as e:
-                gr.Error(f"Error loading thresholds from JSON: {e}")
-                # Return original state and no UI update on error
-                return current_state, gr.update()
-
-        # Add click handler for the Load JSON Thresholds button
-        load_json_thresholds_btn.click(
-            fn=load_thresholds_from_json,
-            inputs=[processor_state, json_threshold_upload],
-            outputs=[processor_state, class_thresholds_df] # Update state and the UI table
+        # Add click handlers for the new buttons
+        threshold_json_select_btn.click(
+            fn=select_threshold_json_file,
+            inputs=[processor_state],
+            outputs=[processor_state, class_thresholds_df],
+            api_name="select_threshold_json" # Add unique API name for better traceability
+        )
+        
+        threshold_template_download_btn.click(
+            fn=download_threshold_template,
+            inputs=[processor_state]
         )
 
         # Plot button action (Histogram - ignores class thresholds)
