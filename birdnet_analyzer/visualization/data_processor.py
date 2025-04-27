@@ -41,6 +41,7 @@ class DataProcessor:
         "Recording": "Recording",
         "Duration": "Duration",
         "Confidence": "Confidence",
+        "Correctness": "Correctness",  # Add Correctness field with default column name
     }
 
     def __init__(
@@ -264,6 +265,23 @@ class DataProcessor:
                                     bins=[-1, 5, 11, 16, 21, 24],
                                     labels=['Night', 'Morning', 'Midday', 'Afternoon', 'Evening'])
         
+        # Process correctness column - normalize values to True, False, or None
+        correctness_col = self.get_column_name("Correctness")
+        if correctness_col in df.columns:
+            # Convert to lowercase strings first (handling NaN/None values)
+            df[correctness_col] = df[correctness_col].astype(str).str.lower()
+            
+            # Map values to True, False, or None
+            df[correctness_col] = df[correctness_col].apply(
+                lambda x: True if x in ['true', 'correct'] 
+                      else False if x in ['false', 'incorrect'] 
+                      else None if x in ['nan', 'none', ''] or pd.isna(x) 
+                      else None
+            )
+        else:
+            # Create correctness column with all None values if it doesn't exist
+            df[correctness_col] = None
+
         # Add metadata information
         df = self._add_metadata_info(df)
         

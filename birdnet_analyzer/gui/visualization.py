@@ -161,6 +161,7 @@ def build_visualization_tab():
         "Class": "Common Name",
         "Recording": "Begin Path",
         "Confidence": "Confidence",
+        "Correctness": "Correctness",
     }
 
     # Default columns for metadata
@@ -176,6 +177,7 @@ def build_visualization_tab():
         "Class": loc.localize("eval-tab-column-class-label"),
         "Recording": loc.localize("eval-tab-column-recording-label"),
         "Confidence": loc.localize("eval-tab-column-confidence-label"),
+        "Correctness": loc.localize("viz-tab-column-correctness-label"),
         "Site": loc.localize("viz-tab-column-site-label"),
         "X": loc.localize("viz-tab-column-latitude-label"),
         "Y": loc.localize("viz-tab-column-longitude-label"),
@@ -215,6 +217,7 @@ def build_visualization_tab():
         pred_class,
         pred_confidence,
         pred_recording,
+        pred_correctness=None,  # Add correctness parameter with default
         prediction_dir=None,
     ):
         """Creates a simplified DataProcessor for predictions only."""
@@ -243,6 +246,8 @@ def build_visualization_tab():
                     cols_pred[key] = pred_confidence or default
                 elif key == "Recording":
                     cols_pred[key] = pred_recording or default
+                elif key == "Correctness":
+                    cols_pred[key] = pred_correctness or default
 
             print("Using column mappings:", cols_pred)
 
@@ -286,7 +291,7 @@ def build_visualization_tab():
         cols = get_columns_from_uploaded_files(uploaded_files)
         cols = [""] + cols
         updates = []
-        for label in ["Start Time", "End Time", "Class", "Confidence", "Recording"]:
+        for label in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Correctness"]:
             default_val = prediction_default_columns.get(label)
             val = default_val if default_val in cols else None
             updates.append(gr.update(choices=cols, value=val))
@@ -328,6 +333,7 @@ def build_visualization_tab():
         pred_class,
         pred_confidence,
         pred_recording,
+        pred_correctness,
         meta_site,
         meta_x,
         meta_y,
@@ -349,6 +355,7 @@ def build_visualization_tab():
             pred_class,
             pred_confidence,
             pred_recording,
+            pred_correctness,
             prediction_dir,
         )
         
@@ -1212,8 +1219,8 @@ def build_visualization_tab():
             with gr.Accordion(loc.localize("eval-tab-prediction-col-accordion-label"), open=True):
                 with gr.Row():
                     prediction_columns: dict[str, gr.Dropdown] = {}
-                    for col in ["Start Time", "End Time", "Class", "Confidence", "Recording"]:
-                        prediction_columns[col] = gr.Dropdown(choices=[], label=localized_column_labels[col])
+                    for col in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Correctness"]:
+                        prediction_columns[col] = gr.Dropdown(choices=[], label=localized_column_labels.get(col, col))
 
         # Metadata columns box
         with gr.Group(visible=False) as metadata_group:
@@ -1339,6 +1346,21 @@ def build_visualization_tab():
                         scale=2
                     )
 
+                # Add correctness mode selection
+                correctness_mode = gr.Radio(
+                    choices=[
+                        "Ignore correctness flags",
+                        "Show only correct",
+                        "Show only incorrect",
+                        "Show only unspecified",
+                        "Distinguish all"
+                    ],
+                    value="Ignore correctness flags",
+                    label="Correctness Filter Mode",
+                    info="Select how to handle the correctness flags in visualizations",
+                    interactive=True
+                )
+
         # Warning message about model validation and interpretation
         gr.Markdown(
             """
@@ -1396,7 +1418,9 @@ def build_visualization_tab():
             show_label=False,
             type="pandas",
             visible=False,
-            interactive=False
+            interactive=False,
+            wrap=True,  # Enable text wrapping for better readability
+            column_widths=[200, 110, 80, 130, 90, 150, 110, 110, 80]  # Set widths for all columns
         )
 
         # Interactions
@@ -1413,7 +1437,7 @@ def build_visualization_tab():
         prediction_select_directory_btn.click(
             get_selection_func("eval-predictions-dir", update_prediction_columns),
             outputs=[prediction_files_state, prediction_directory_input, prediction_group]
-            + [prediction_columns[label] for label in ["Start Time", "End Time", "Class", "Confidence", "Recording"]],
+            + [prediction_columns[label] for label in ["Start Time", "End Time", "Class", "Confidence", "Recording", "Correctness"]],
             show_progress=True,
         )
 
@@ -1447,6 +1471,7 @@ def build_visualization_tab():
             prediction_columns["Class"],
             prediction_columns["Confidence"],
             prediction_columns["Recording"],
+            prediction_columns["Correctness"],
             metadata_columns["Site"],
             metadata_columns["X"],
             metadata_columns["Y"],
@@ -1463,6 +1488,7 @@ def build_visualization_tab():
                     prediction_columns["Class"],
                     prediction_columns["Confidence"],
                     prediction_columns["Recording"],
+                    prediction_columns["Correctness"],
                     metadata_columns["Site"],
                     metadata_columns["X"],
                     metadata_columns["Y"],
@@ -1588,6 +1614,7 @@ def build_visualization_tab():
             time_start_minute,
             time_end_hour,
             time_end_minute,
+            correctness_mode,  # Add correctness_mode parameter
         ):
             """Count detections for each class with the applied filters."""
             if not proc_state or not proc_state.processor:
@@ -1608,6 +1635,24 @@ def build_visualization_tab():
             # Apply class and recording filters
             col_class = proc_state.processor.get_column_name("Class")
             conf_col = proc_state.processor.get_column_name("Confidence")
+            corr_col = proc_state.processor.get_column_name("Correctness")
+            
+            # Debug which correctness column is being used
+            print(f"Using correctness column: '{corr_col}'")
+            print(f"Available columns: {df.columns.tolist()}")
+            
+            # Check if correctness column exists; if not, try both capitalization forms
+            if corr_col not in df.columns:
+                # Try both 'correctness' and 'Correctness'
+                alt_corr_col = 'correctness' if corr_col == 'Correctness' else 'Correctness'
+                if alt_corr_col in df.columns:
+                    print(f"Switching to alternative correctness column: '{alt_corr_col}'")
+                    corr_col = alt_corr_col
+                else:
+                    # Create an empty correctness column if none exists
+                    print(f"No correctness column found, creating a placeholder")
+                    df[corr_col] = None
+            
             if selected_classes_list:
                 df = df[df[col_class].isin(selected_classes_list)]
                 
@@ -1633,31 +1678,156 @@ def build_visualization_tab():
                 time_end_minute
             )
             
+            # Log count before filtering
+            print(f"Records before correctness filter: {len(df)}")
+            print(f"Correctness mode: {correctness_mode}")
+            
+            # Make sure corr_col has proper boolean values (not strings)
+            if corr_col in df.columns:
+                # Convert string 'true'/'false' to proper boolean
+                df[corr_col] = df[corr_col].map({
+                    'true': True, 'True': True, True: True, 1: True,
+                    'false': False, 'False': False, False: False, 0: False,
+                    'nan': None, 'none': None, '': None, 'null': None
+                }, na_action='ignore')
+            
+            # Apply correctness filter based on selected mode
+            if correctness_mode == "Show only correct":
+                df = df[(df[corr_col] == True) | (df[corr_col] == 'True')]
+                print(f"Records after filtering for correct: {len(df)}")
+            elif correctness_mode == "Show only incorrect":
+                df = df[(df[corr_col] == False) | (df[corr_col] == 'False')]
+                print(f"Records after filtering for incorrect: {len(df)}")
+            elif correctness_mode == "Show only unspecified":
+                df = df[(df[corr_col].isna()) | (df[corr_col] == '') | (df[corr_col] == 'nan')]
+                print(f"Records after filtering for unspecified: {len(df)}")
+            # "Ignore correctness flags" and "Distinguish all" modes don't filter the data
+            
             if df.empty:
                 raise gr.Error("No data matches the selected filters")
                 
-            # Count detections by class
-            class_counts = df[col_class].value_counts().reset_index()
-            class_counts.columns = ["Species", "Detections"]
+            # Handle the distinction between modes for counting
+            if correctness_mode == "Distinguish all":
+                # Create a human-readable correctness column for display
+                df['correctness_display'] = df[corr_col].apply(
+                    lambda x: "Correct" if x == True else "Incorrect" if x == False else "Unspecified"
+                )
+                
+                # Get all unique classes
+                classes = df[col_class].unique()
+                
+                # Create a new DataFrame for results with one row per species
+                result_rows = []
+                
+                # Calculate the total number of detections
+                total_detections = len(df)
+                
+                # For each class, calculate counts by correctness value
+                for cls in classes:
+                    class_df = df[df[col_class] == cls]
+                    
+                    # Count by correctness
+                    correct_count = sum(class_df['correctness_display'] == "Correct")
+                    incorrect_count = sum(class_df['correctness_display'] == "Incorrect")
+                    unspecified_count = sum(class_df['correctness_display'] == "Unspecified")
+                    total_count = len(class_df)
+                    
+                    # Calculate percentages of total detections
+                    correct_pct = f"{(correct_count / total_detections * 100):.1f}%" if total_detections else "0.0%"
+                    incorrect_pct = f"{(incorrect_count / total_detections * 100):.1f}%" if total_detections else "0.0%"
+                    unspecified_pct = f"{(unspecified_count / total_detections * 100):.1f}%" if total_detections else "0.0%"
+                    total_pct = f"{(total_count / total_detections * 100):.1f}%" if total_detections else "0.0%"
+                    
+                    # Add row for this class
+                    result_rows.append({
+                        "Species": cls,
+                        "Correct Count": correct_count,
+                        "Correct %": correct_pct,
+                        "Incorrect Count": incorrect_count,
+                        "Incorrect %": incorrect_pct,
+                        "Unspecified Count": unspecified_count,
+                        "Unspecified %": unspecified_pct,
+                        "Total Count": total_count,
+                        "Total %": total_pct,
+                    })
+                
+                # Create DataFrame and sort by total count (descending)
+                result_df = pd.DataFrame(result_rows)
+                result_df = result_df.sort_values("Total Count", ascending=False)
+                
+                # Calculate grand totals
+                correct_total = sum(df['correctness_display'] == "Correct")
+                incorrect_total = sum(df['correctness_display'] == "Incorrect")
+                unspecified_total = sum(df['correctness_display'] == "Unspecified")
+                
+                # Add grand total row
+                grand_total = {
+                    "Species": "Grand Total",
+                    "Correct Count": correct_total,
+                    "Correct %": f"{(correct_total / total_detections * 100):.1f}%" if total_detections else "0.0%",
+                    "Incorrect Count": incorrect_total,
+                    "Incorrect %": f"{(incorrect_total / total_detections * 100):.1f}%" if total_detections else "0.0%",
+                    "Unspecified Count": unspecified_total,
+                    "Unspecified %": f"{(unspecified_total / total_detections * 100):.1f}%" if total_detections else "0.0%",
+                    "Total Count": total_detections,
+                    "Total %": "100.0%",
+                }
+                
+                # Concatenate with the grand total row
+                result_df = pd.concat([result_df, pd.DataFrame([grand_total])], ignore_index=True)
+                
+                # Organize columns 
+                column_order = [
+                    "Species", 
+                    "Correct Count", "Correct %",
+                    "Incorrect Count", "Incorrect %", 
+                    "Unspecified Count", "Unspecified %",
+                    "Total Count", "Total %"
+                ]
+                result_df = result_df[column_order]
+                
+            else:
+                # Standard counting logic for other modes (no distinction by correctness)
+                class_counts = df[col_class].value_counts().reset_index()
+                class_counts.columns = ["Species", "Count"]
+                
+                # Add percentage column
+                total = class_counts["Count"].sum()
+                class_counts["Percentage"] = (class_counts["Count"] / total * 100).round(1).astype(str) + "%"
+                
+                # Sort by detection count (descending)
+                class_counts = class_counts.sort_values("Count", ascending=False)
+                
+                # Add total row
+                total_row = pd.DataFrame({
+                    "Species": ["Total"],
+                    "Count": [total],
+                    "Percentage": ["100.0%"]
+                })
+                
+                result_df = pd.concat([class_counts, total_row])
             
-            # Add percentage column
-            total = class_counts["Detections"].sum()
-            class_counts["Percentage"] = (class_counts["Detections"] / total * 100).round(1).astype(str) + "%"
+            # Set column widths for better display
+            column_widths = {
+                "Species": "200px",
+                "Count": "110px",
+                "Percentage": "110px",
+                "Correct Count": "110px", 
+                "Correct %": "80px",
+                "Incorrect Count": "130px", 
+                "Incorrect %": "90px",
+                "Unspecified Count": "150px", 
+                "Unspecified %": "110px",
+                "Total Count": "110px", 
+                "Total %": "80px"
+            }
             
-            # Sort by detection count (descending)
-            class_counts = class_counts.sort_values("Detections", ascending=False)
-            
-            # Add total row
-            total_row = pd.DataFrame({
-                "Species": ["Total"],
-                "Detections": [total],
-                "Percentage": ["100.0%"]
-            })
-            
-            result_df = pd.concat([class_counts, total_row])
-            
-            return gr.update(value=result_df, visible=True)
-            
+            return gr.update(
+                value=result_df, 
+                visible=True, 
+                column_widths=[column_widths.get(col, "120px") for col in result_df.columns]
+            )
+
         # Add click handler for calculate detections button
         calculate_detections_btn.click(
             fn=calculate_detection_counts,
@@ -1671,6 +1841,7 @@ def build_visualization_tab():
                 time_start_minute,
                 time_end_hour,
                 time_end_minute,
+                correctness_mode,  # Add correctness_mode input
             ],
             outputs=[detections_table]
         )
