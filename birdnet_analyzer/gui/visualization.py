@@ -10,6 +10,7 @@ import datetime
 import gradio as gr
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 import birdnet_analyzer.gui.localization as loc
 import birdnet_analyzer.gui.utils as gu
@@ -486,6 +487,301 @@ def build_visualization_tab():
             return [new_state, gr.update(visible=True, value=fig_hist)]
         except Exception as e:
             raise gr.Error(f"Error creating plots: {str(e)}")
+
+    def plot_temporal_scatter(
+        proc_state: ProcessorState,
+        selected_classes_list,
+        selected_recordings_list,
+        date_range_start,
+        date_range_end,
+        time_start_hour,
+        time_start_minute,
+        time_end_hour,
+        time_end_minute,
+        meta_x=None,
+        meta_y=None
+    ):
+        """Creates a temporal scatter plot showing detections by date and time of day."""
+        if not proc_state or not proc_state.processor:
+            raise gr.Error("Please load predictions first")
+            
+        if proc_state.class_thresholds is None:
+            raise gr.Error("Class thresholds not initialized. Load data first.")
+            
+        # Validate thresholds from state
+        validated_thresholds_df = proc_state.class_thresholds
+            
+        # Get data and apply all filters
+        df = proc_state.processor.get_data()
+        
+        # Apply class and recording filters
+        col_class = proc_state.processor.get_column_name("Class")
+        conf_col = proc_state.processor.get_column_name("Confidence")
+        if selected_classes_list:
+            df = df[df[col_class].isin(selected_classes_list)]
+        if selected_recordings_list:
+            selected_recordings_list = [rec.lower() for rec in selected_recordings_list]
+            df["recording_filename"] = df["recording_filename"].apply(
+                lambda x: os.path.splitext(os.path.basename(x.strip()))[0].lower() 
+                if isinstance(x, str) else x
+            )
+            df = df[df["recording_filename"].isin(selected_recordings_list)]
+            
+        # Apply class-specific confidence thresholds
+        df = apply_class_thresholds(df, validated_thresholds_df, col_class, conf_col)
+        
+        # Apply date and time filters
+        df = apply_datetime_filters(
+            df, 
+            date_range_start, 
+            date_range_end,
+            time_start_hour,
+            time_start_minute,
+            time_end_hour,
+            time_end_minute
+        )
+        
+        if df.empty:
+            raise gr.Error("No data matches the selected filters")
+        
+        # Ensure we have datetime data for plotting
+        if 'prediction_time' not in df.columns or df['prediction_time'].isnull().all():
+            raise gr.Error("Prediction time data is not available")
+        
+        # Extract date and time components for plotting
+        df['date'] = df['prediction_time'].dt.date
+        
+        # Convert time to decimal hours for plotting (e.g. 14:30 = 14.5)
+        df['decimal_time'] = df['prediction_time'].dt.hour + df['prediction_time'].dt.minute/60 + df['prediction_time'].dt.second/3600
+        
+        # Get or create color map for consistency with other plots
+        all_classes = sorted(df[col_class].unique())
+        color_map = proc_state.color_map or {}
+        
+        # If no color map exists or new classes found, create/update it
+        if not color_map or not all(cls in color_map for cls in all_classes):
+            base_colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink']
+            existing_classes = list(color_map.keys())
+            new_classes = [cls for cls in all_classes if cls not in existing_classes]
+            next_color_idx = len(existing_classes)
+            
+            for cls in new_classes:
+                color_map[cls] = base_colors[next_color_idx % len(base_colors)]
+                next_color_idx += 1
+        
+        # Create scatter plot with date on x-axis and time of day on y-axis
+        fig = px.scatter(
+            df,
+            x='date',
+            y='decimal_time',
+            color=col_class,
+            color_discrete_map=color_map,
+            hover_data=[col_class, conf_col],
+            opacity=0.3,
+            title="Temporal Distribution of Detections"
+        )
+        
+        # Format hover template to show time in HH:MM format
+        for trace in fig.data:
+            trace.hovertemplate = (
+                "Date: %{x|%Y-%m-%d}<br>" +
+                "Time: %{customdata[1]:.2f} (%{y:.2f} hrs)<br>" +
+                "Species: %{customdata[0]}<br>" +
+                "Confidence: %{customdata[1]:.3f}<br>" +
+                "<extra></extra>"
+            )
+        
+        # Calculate mean latitude and longitude for sunrise/sunset calculations
+        # Try to get coordinates from the data or use a default
+        try:
+            # First check if we have latitude/longitude in the dataframe
+            if 'latitude' in df.columns and 'longitude' in df.columns and not df['latitude'].isnull().all() and not df['longitude'].isnull().all():
+                mean_lat = df['latitude'].mean()
+                mean_lon = df['longitude'].mean()
+                print(f"Using coordinates from data: {mean_lat}, {mean_lon}")
+            # If not, see if we can get them from metadata using provided column names
+            elif proc_state.metadata_dir:
+                meta_files = list(Path(proc_state.metadata_dir).glob("*.csv"))
+                if not meta_files:
+                    raise ValueError("No metadata CSV files found in the metadata directory")
+                    
+                metadata_df = pd.read_csv(meta_files[0])
+                print(f"Metadata columns available: {metadata_df.columns.tolist()}")
+                    
+                # First try using the explicitly provided meta_x and meta_y from UI
+                lat_col = meta_x
+                lon_col = meta_y
+                    
+                # If not provided, try common column names
+                if not lat_col or not lon_col or lat_col not in metadata_df.columns or lon_col not in metadata_df.columns:
+                    print("Metadata column names not provided or invalid, trying common column names...")
+                    lat_cols = ['latitude', 'lat', 'y', 'Y', 'LAT', 'Latitude']
+                    lon_cols = ['longitude', 'lon', 'long', 'x', 'X', 'LON', 'Longitude']
+                        
+                    lat_col = next((col for col in lat_cols if col in metadata_df.columns), None)
+                    lon_col = next((col for col in lon_cols if col in metadata_df.columns), None)
+                
+                if lat_col is None or lon_col is None:
+                    raise ValueError(f"Could not find latitude/longitude columns in metadata. Available columns: {', '.join(metadata_df.columns)}")
+                        
+                print(f"Using metadata columns: {lat_col} for latitude, {lon_col} for longitude")
+                mean_lat = pd.to_numeric(metadata_df[lat_col], errors='coerce').mean()
+                mean_lon = pd.to_numeric(metadata_df[lon_col], errors='coerce').mean()
+            else:
+                raise ValueError("No location data available. Please provide metadata with latitude and longitude.")
+                        
+            # Check that we have valid coordinates
+            if pd.isna(mean_lat) or pd.isna(mean_lon):
+                raise ValueError("Invalid coordinates (NaN values)")
+                        
+            print(f"Using average location: {mean_lat}, {mean_lon}")
+                        
+            # Try to import astral for sunrise/sunset calculations
+            try:
+                from astral import LocationInfo
+                from astral.sun import sun
+                from datetime import timedelta, date
+                print("Using Astral for sunrise/sunset calculations")
+                
+                # Get unique dates in the data
+                unique_dates = sorted(df['date'].unique())
+                if not unique_dates:
+                    raise ValueError("No valid dates found in the data")
+                    
+                # Create location info for the site's average location
+                site = LocationInfo("RecordingSite", "Region", "UTC", mean_lat, mean_lon)
+                
+                # Define color for sunrise/sunset lines - use purple (solid lines)
+                sun_line_color = "purple"
+                
+                # Calculate sunrise/sunset only every 10 days, starting from the first date
+                first_date = min(unique_dates)
+                last_date = max(unique_dates)
+                
+                # Function to convert a date to days since first date
+                def days_since_first(d):
+                    if isinstance(d, pd.Timestamp):
+                        d = d.date()
+                    return (d - first_date).days
+                    
+                # Find dates to calculate (every 10 days)
+                calculation_dates = []
+                current_date = first_date
+                while current_date <= last_date:
+                    calculation_dates.append(current_date)
+                    current_date += timedelta(days=10)
+                
+                # Include last date if it's not already included
+                if calculation_dates[-1] != last_date:
+                    calculation_dates.append(last_date)
+                    
+                print(f"Calculating sunrise/sunset for {len(calculation_dates)} dates " 
+                      f"(every 10 days from {first_date} to {last_date})")
+                    
+                # Calculate sunrise/sunset for the selected dates
+                sunrise_data = {}  # {date: decimal_time}
+                sunset_data = {}   # {date: decimal_time}
+                
+                for calc_date in calculation_dates:
+                    try:
+                        sun_info = sun(site.observer, date=calc_date)
+                        
+                        # Extract sunrise and sunset times
+                        sunrise_time = sun_info['sunrise']
+                        sunset_time = sun_info['sunset']
+                        
+                        # Remove timezone info if present
+                        if sunrise_time.tzinfo is not None:
+                            sunrise_time = sunrise_time.replace(tzinfo=None)
+                        if sunset_time.tzinfo is not None:
+                            sunset_time = sunset_time.replace(tzinfo=None)
+                        
+                        # Convert to decimal hours for plotting
+                        sunrise_decimal = sunrise_time.hour + sunrise_time.minute/60 + sunrise_time.second/3600
+                        sunset_decimal = sunset_time.hour + sunset_time.minute/60 + sunset_time.second/3600
+                        
+                        # Store calculations
+                        sunrise_data[calc_date] = sunrise_decimal
+                        sunset_data[calc_date] = sunset_decimal
+                        
+                        print(f"Date {calc_date}: Sunrise at {sunrise_decimal:.2f}h, Sunset at {sunset_decimal:.2f}h")
+                        
+                    except Exception as e:
+                        print(f"Error calculating sunrise/sunset for {calc_date}: {str(e)}")
+                
+                # Create continuous sunrise and sunset lines
+                # First prepare x and y values for each line
+                sunrise_x = []
+                sunrise_y = []
+                sunset_x = []
+                sunset_y = []
+                
+                # Convert calculated points to lists for plotting
+                for date_val in sorted(sunrise_data.keys()):
+                    sunrise_x.append(date_val)
+                    sunrise_y.append(sunrise_data[date_val])
+                    
+                    sunset_x.append(date_val)
+                    sunset_y.append(sunset_data[date_val])
+                
+                # Add sunrise line as a continuous line
+                fig.add_trace(
+                    go.Scatter(
+                        x=sunrise_x,
+                        y=sunrise_y,
+                        mode='lines',
+                        line=dict(color=sun_line_color, width=2),
+                        name='Sunrise',
+                        showlegend=True
+                    )
+                )
+                
+                # Add sunset line as a continuous line
+                fig.add_trace(
+                    go.Scatter(
+                        x=sunset_x,
+                        y=sunset_y,
+                        mode='lines',
+                        line=dict(color=sun_line_color, width=2),
+                        name='Sunset',
+                        showlegend=True
+                    )
+                )
+                    
+            except ImportError:
+                print("Astral is not installed. Install with: pip install astral")
+                gr.Warning("For sunrise/sunset lines, install Astral: pip install astral")
+                    
+        except Exception as e:
+            print(f"Error adding sunrise/sunset lines: {str(e)}")
+            import traceback
+            traceback.print_exc()  # Print the full traceback for debugging
+            gr.Warning(f"Could not add sunrise/sunset lines: {str(e)[:100]}...")
+        
+        # Customize layout
+        fig.update_layout(
+            xaxis_title="Date",
+            yaxis_title="Time of Day (hours)",
+            yaxis=dict(
+                tickmode='array',
+                tickvals=[0, 3, 6, 9, 12, 15, 18, 21, 24],
+                ticktext=['00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00', '24:00']
+            ),
+            legend_title="Species",
+            legend=dict(x=1.02, y=1),
+            margin=dict(r=150),  # Add right margin for legend
+        )
+        
+        # Update state with new color map for consistency
+        new_state = ProcessorState(
+            processor=proc_state.processor,
+            prediction_dir=proc_state.prediction_dir,
+            metadata_dir=proc_state.metadata_dir,
+            color_map=color_map,
+            class_thresholds=validated_thresholds_df
+        )
+        
+        return [new_state, gr.update(value=fig, visible=True)]
 
     def plot_spatial_distribution(
         proc_state: ProcessorState,
@@ -1080,6 +1376,16 @@ def build_visualization_tab():
             label="Time Distribution Plot",
             visible=False
         )
+        
+        # Add temporal scatter plot button and output
+        plot_temporal_scatter_btn = gr.Button(
+            "Plot Temporal Scatter", 
+            variant="huggingface"
+        )
+        temporal_scatter_output = gr.Plot(
+            label="Temporal Scatter Plot",
+            visible=False
+        )
 
         # Add calculate detections button and output table
         calculate_detections_btn = gr.Button(
@@ -1250,6 +1556,25 @@ def build_visualization_tab():
                 time_end_minute,
             ],
             outputs=[time_distribution_output]
+        )
+        
+        # Add click handler for temporal scatter button
+        plot_temporal_scatter_btn.click(
+            fn=plot_temporal_scatter,
+            inputs=[
+                processor_state,
+                select_classes_checkboxgroup,
+                select_recordings_checkboxgroup,
+                date_range_start,
+                date_range_end,
+                time_start_hour,
+                time_start_minute,
+                time_end_hour,
+                time_end_minute,
+                metadata_columns["X"],  # Add the metadata X column selection
+                metadata_columns["Y"],  # Add the metadata Y column selection
+            ],
+            outputs=[processor_state, temporal_scatter_output]
         )
 
         # Handler function for calculate detections button (Uses class thresholds from state)
