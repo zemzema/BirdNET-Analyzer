@@ -161,7 +161,7 @@ def build_visualization_tab():
         "Class": "Common Name",
         "Recording": "Begin Path",
         "Confidence": "Confidence",
-        "Correctness": "Correctness",
+        "Correctness": "correctness",
     }
 
     # Default columns for metadata
@@ -506,7 +506,8 @@ def build_visualization_tab():
         time_end_hour,
         time_end_minute,
         meta_x=None,
-        meta_y=None
+        meta_y=None,
+        correctness_mode="Ignore correctness flags"  # Add correctness_mode parameter with default
     ):
         """Creates a temporal scatter plot showing detections by date and time of day."""
         if not proc_state or not proc_state.processor:
@@ -524,6 +525,20 @@ def build_visualization_tab():
         # Apply class and recording filters
         col_class = proc_state.processor.get_column_name("Class")
         conf_col = proc_state.processor.get_column_name("Confidence")
+        corr_col = proc_state.processor.get_column_name("Correctness")
+        
+        # Check if correctness column exists; if not, try both capitalization forms
+        if corr_col not in df.columns:
+            # Try both 'correctness' and 'Correctness'
+            alt_corr_col = 'correctness' if corr_col == 'Correctness' else 'Correctness'
+            if alt_corr_col in df.columns:
+                print(f"Switching to alternative correctness column: '{alt_corr_col}'")
+                corr_col = alt_corr_col
+            else:
+                # Create an empty correctness column if none exists
+                print(f"No correctness column found, creating a placeholder")
+                df[corr_col] = None
+        
         if selected_classes_list:
             df = df[df[col_class].isin(selected_classes_list)]
         if selected_recordings_list:
@@ -547,6 +562,26 @@ def build_visualization_tab():
             time_end_hour,
             time_end_minute
         )
+        
+        # Normalize correctness values
+        df[corr_col] = df[corr_col].map({
+            'true': True, 'True': True, True: True, 1: True,
+            'false': False, 'False': False, False: False, 0: False,
+            'nan': None, 'none': None, '': None, 'null': None, 'NA': None
+        }, na_action='ignore')
+        
+        # Create a human-readable correctness column for display
+        df['correctness_display'] = df[corr_col].apply(
+            lambda x: "Correct" if x == True else "Incorrect" if x == False else "Unspecified"
+        )
+        
+        # Apply correctness filter based on selected mode
+        if correctness_mode == "Show only correct":
+            df = df[df[corr_col] == True]
+        elif correctness_mode == "Show only incorrect":
+            df = df[df[corr_col] == False]
+        elif correctness_mode == "Show only unspecified":
+            df = df[df[corr_col].isna()]
         
         if df.empty:
             raise gr.Error("No data matches the selected filters")
@@ -576,27 +611,149 @@ def build_visualization_tab():
                 color_map[cls] = base_colors[next_color_idx % len(base_colors)]
                 next_color_idx += 1
         
-        # Create scatter plot with date on x-axis and time of day on y-axis
-        fig = px.scatter(
-            df,
-            x='date',
-            y='decimal_time',
-            color=col_class,
-            color_discrete_map=color_map,
-            hover_data=[col_class, conf_col],
-            opacity=0.3,
-            title="Temporal Distribution of Detections"
-        )
+        # Define marker symbols for each correctness state - moved outside the if block so it's available to all modes
+        correctness_symbols = {
+            "Correct": "circle",
+            "Incorrect": "x", 
+            "Unspecified": "diamond"
+        }
         
-        # Format hover template to show time in HH:MM format
-        for trace in fig.data:
-            trace.hovertemplate = (
-                "Date: %{x|%Y-%m-%d}<br>" +
-                "Time: %{customdata[1]:.2f} (%{y:.2f} hrs)<br>" +
-                "Species: %{customdata[0]}<br>" +
-                "Confidence: %{customdata[1]:.3f}<br>" +
-                "<extra></extra>"
+        # Create the plot - different approach based on correctness mode
+        fig = go.Figure()
+        
+        if correctness_mode == "Distinguish all":
+            # For each class, create separate traces for each correctness state
+            for cls in all_classes:
+                cls_color = color_map.get(cls)
+                cls_data = df[df[col_class] == cls]
+                
+                # For each correctness state, create a separate trace
+                for corr_state, symbol in correctness_symbols.items():
+                    state_data = cls_data[cls_data['correctness_display'] == corr_state]
+                    if not state_data.empty:
+                        fig.add_trace(go.Scatter(
+                            x=state_data['date'],
+                            y=state_data['decimal_time'],
+                            mode='markers',
+                            name=f"{cls} - {corr_state}",
+                            marker=dict(
+                                color=cls_color,
+                                symbol=symbol,
+                                size=8,
+                                opacity=0.3,
+                            ),
+                            hovertemplate=(
+                                "Date: %{x|%Y-%m-%d}<br>" +
+                                "Time: %{y:.2f} hrs<br>" +
+                                "Species: " + cls + "<br>" +
+                                "Status: " + corr_state + "<br>" +
+                                "Confidence: " + state_data[conf_col].astype(str) + "<br>" +
+                                "<extra></extra>"
+                            )
+                        ))
+        elif correctness_mode == "Show only correct":
+            # Use the same marker as "Correct" in distinguish mode (circle)
+            for cls in all_classes:
+                cls_color = color_map.get(cls)
+                cls_data = df[df[col_class] == cls]
+                
+                if not cls_data.empty:
+                    fig.add_trace(go.Scatter(
+                        x=cls_data['date'],
+                        y=cls_data['decimal_time'],
+                        mode='markers',
+                        name=cls,
+                        marker=dict(
+                            color=cls_color,
+                            symbol=correctness_symbols["Correct"],  # Use circle symbol
+                            size=8,
+                            opacity=0.3,
+                        ),
+                        hovertemplate=(
+                            "Date: %{x|%Y-%m-%d}<br>" +
+                            "Time: %{y:.2f} hrs<br>" +
+                            "Species: " + cls + "<br>" +
+                            "Status: Correct<br>" +
+                            "Confidence: " + cls_data[conf_col].astype(str) + "<br>" +
+                            "<extra></extra>"
+                        )
+                    ))
+        elif correctness_mode == "Show only incorrect":
+            # Use the same marker as "Incorrect" in distinguish mode (x)
+            for cls in all_classes:
+                cls_color = color_map.get(cls)
+                cls_data = df[df[col_class] == cls]
+                
+                if not cls_data.empty:
+                    fig.add_trace(go.Scatter(
+                        x=cls_data['date'],
+                        y=cls_data['decimal_time'],
+                        mode='markers',
+                        name=cls,
+                        marker=dict(
+                            color=cls_color,
+                            symbol=correctness_symbols["Incorrect"],  # Use x symbol
+                            size=8,
+                            opacity=0.3,
+                        ),
+                        hovertemplate=(
+                            "Date: %{x|%Y-%m-%d}<br>" +
+                            "Time: %{y:.2f} hrs<br>" +
+                            "Species: " + cls + "<br>" +
+                            "Status: Incorrect<br>" +
+                            "Confidence: " + cls_data[conf_col].astype(str) + "<br>" +
+                            "<extra></extra>"
+                        )
+                    ))
+        elif correctness_mode == "Show only unspecified":
+            # Use the same marker as "Unspecified" in distinguish mode (diamond)
+            for cls in all_classes:
+                cls_color = color_map.get(cls)
+                cls_data = df[df[col_class] == cls]
+                
+                if not cls_data.empty:
+                    fig.add_trace(go.Scatter(
+                        x=cls_data['date'],
+                        y=cls_data['decimal_time'],
+                        mode='markers',
+                        name=cls,
+                        marker=dict(
+                            color=cls_color,
+                            symbol=correctness_symbols["Unspecified"],  # Use diamond symbol
+                            size=8,
+                            opacity=0.3,
+                        ),
+                        hovertemplate=(
+                            "Date: %{x|%Y-%m-%d}<br>" +
+                            "Time: %{y:.2f} hrs<br>" +
+                            "Species: " + cls + "<br>" +
+                            "Status: Unspecified<br>" +
+                            "Confidence: " + cls_data[conf_col].astype(str) + "<br>" +
+                            "<extra></extra>"
+                        )
+                    ))
+        else:
+            # Default mode - "Ignore correctness flags" - use standard plotly express scatter
+            fig = px.scatter(
+                df,
+                x='date',
+                y='decimal_time',
+                color=col_class,
+                color_discrete_map=color_map,
+                hover_data=[col_class, conf_col],
+                opacity=0.3,
+                title="Temporal Distribution of Detections"
             )
+            
+            # Format hover template to show time in HH:MM format
+            for trace in fig.data:
+                trace.hovertemplate = (
+                    "Date: %{x|%Y-%m-%d}<br>" +
+                    "Time: %{customdata[1]:.2f} (%{y:.2f} hrs)<br>" +
+                    "Species: %{customdata[0]}<br>" +
+                    "Confidence: %{customdata[1]:.3f}<br>" +
+                    "<extra></extra>"
+                )
         
         # Calculate mean latitude and longitude for sunrise/sunset calculations
         # Try to get coordinates from the data or use a default
@@ -767,6 +924,7 @@ def build_visualization_tab():
         
         # Customize layout
         fig.update_layout(
+            title="Temporal Distribution of Detections",
             xaxis_title="Date",
             yaxis_title="Time of Day (hours)",
             yaxis=dict(
@@ -775,7 +933,11 @@ def build_visualization_tab():
                 ticktext=['00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00', '24:00']
             ),
             legend_title="Species",
-            legend=dict(x=1.02, y=1),
+            legend=dict(
+                x=1.02, 
+                y=1,
+                itemsizing='constant'  # Makes legend symbols the same size
+            ),
             margin=dict(r=150),  # Add right margin for legend
         )
         
@@ -1597,8 +1759,9 @@ def build_visualization_tab():
                 time_start_minute,
                 time_end_hour,
                 time_end_minute,
-                metadata_columns["X"],  # Add the metadata X column selection
-                metadata_columns["Y"],  # Add the metadata Y column selection
+                metadata_columns["X"],
+                metadata_columns["Y"],
+                correctness_mode,  # Add correctness_mode input
             ],
             outputs=[processor_state, temporal_scatter_output]
         )
