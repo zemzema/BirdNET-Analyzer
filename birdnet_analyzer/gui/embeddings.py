@@ -110,7 +110,7 @@ def run_embeddings(
 
     gr.Info(f"{loc.localize('embeddings-tab-finish-info')} {db_path}")
 
-    return gr.Plot(), gr.Slider(visible=False), gr.Number(visible=False), gr.Number(visible=False)
+    return gr.Plot(), gr.Slider(interactive=False), gr.Number(interactive=False), gr.Number(interactive=False)
 
 
 @gu.gui_runtime_error_handler
