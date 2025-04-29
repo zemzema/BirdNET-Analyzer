@@ -1,3 +1,12 @@
+# IDE/Editor settings
+.vscode/*
+
+# Allow VSCode recommendations
+!.vscode/extensions.json
+
+# Ruff
+.ruff_cache
+
 # Models
 checkpoints
 
@@ -28,9 +37,6 @@ example
 
 # Logs
 error_log.txt
-
-# IDE/Editor settings
-.vscode/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -162,11 +168,13 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-
+# GUI generated
 train_data/
 train_cache.npz
 autotune/
-
 gui-settings.json
 state.json
+BirdNET_analysis_params.csv
+
+# Build files
 entitlements.plist
