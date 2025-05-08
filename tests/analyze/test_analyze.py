@@ -263,7 +263,7 @@ def test_analyze_with_speed_up(mock_ensure_model, setup_test_environment):
     """Test analyzing with speed up."""
     env = setup_test_environment
 
-    soundscape_path = "example/soundscape.wav"
+    soundscape_path = "birdnet_analyzer/example/soundscape.wav"
 
     assert os.path.exists(soundscape_path), "Soundscape file does not exist"
 
@@ -290,7 +290,7 @@ def test_analyze_with_slow_down(mock_ensure_model, setup_test_environment):
     """Test analyzing with speed up."""
     env = setup_test_environment
 
-    soundscape_path = "example/soundscape.wav"
+    soundscape_path = "birdnet_analyzer/example/soundscape.wav"
 
     assert os.path.exists(soundscape_path), "Soundscape file does not exist"
 
