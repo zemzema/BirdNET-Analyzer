@@ -1559,8 +1559,8 @@ Coracina lineata_Barred Cuckooshrike
 Coracina longicauda_Hooded Cuckooshrike
 Coracina macei_Veliki kukavičji svračak
 Coracina novaehollandiae_Crnoliki kukavičji svračak
-Coracina papuensis_White-bellied Cuckooshrike
-Coracina pectoralis_White-breasted Cuckooshrike
+Coracina papuensis_Belotrbi kukavičji svračak
+Coracina pectoralis_Belogrudi kukavičji svračak
 Coracina striata_Kukavičji svračak prugastog trbuha
 Coracopsis nigra_Mali vaza papagaj
 Coracopsis vasa_Veliki vaza papagaj
@@ -1609,7 +1609,6 @@ Coryphistera alaudina_Ševolika pećarka
 Coryphospingus cucullatus_Crvena krunasta zeba
 Coryphospingus pileatus_Siva krunasta zeba
 Corythaeola cristata_Veliki plavi turako
-Corythaixoides concolor_Gray Go-away-bird
 Corythaixoides leucogaster_White-bellied Go-away-bird
 Corythopis delalandi_Južni koritopis
 Corythopis torquatus_Prstenasti koritopis
@@ -1669,6 +1668,7 @@ Crax rubra_Veliki hoko
 Creagrus furcatus_Rašljorepi galeb
 Creatophora cinerea_Resasti čvorak
 Crex crex_Prdavac
+Crinifer concolor_Sivi turako
 Crinifer piscator_Zapadni turako bananaš
 Criniger barbatus_Zapadni bradati grinbul
 Criniger calurus_Riđorepi grinbul
@@ -1816,13 +1816,13 @@ Cyornis omissus_Sulawesi Blue Flycatcher
 Cyornis pallidipes_Belotrba plava muharica
 Cyornis poliogenys_Svetlobrada plava muharica
 Cyornis rubeculoides_Plavogrla plava muharica
-Cyornis rufigastra_Mangrove Blue Flycatcher
-Cyornis sumatrensis_Indochinese Blue Flycatcher
+Cyornis rufigastra_Mangrovska plava muharica
+Cyornis sumatrensis_Indokineska plava muharica
 Cyornis superbus_Borneanska plava muharica
 Cyornis tickelliae_Tikelova plava muharica
 Cyornis turcosus_Malezijska plava muharica
 Cyornis umbratilis_Gray-chested Jungle Flycatcher
-Cyornis unicolor_Pale Blue Flycatcher
+Cyornis unicolor_Svetloplava muharica
 Cyornis whitei_Brdska plava muharica
 Cyphorhinus arada_Carić svirač
 Cyphorhinus phaeocephalus_Carić pevač
@@ -1899,22 +1899,22 @@ Dicaeum agile_Debelokljuna cvetarka
 Dicaeum australe_Red-keeled Flowerpecker
 Dicaeum chrysorrheum_Yellow-vented Flowerpecker
 Dicaeum concolor_Nilgiri Flowerpecker
-Dicaeum cruentatum_Scarlet-backed Flowerpecker
+Dicaeum cruentatum_Skerletnoleđa cvetarka
 Dicaeum erythrorhynchos_Bledokljuna cvetarka
 Dicaeum hirundinaceum_Cvetarka imelašica
-Dicaeum ignipectus_Fire-breasted Flowerpecker
-Dicaeum minullum_Plain Flowerpecker
+Dicaeum ignipectus_Plamenogruda cvetarka
+Dicaeum minullum_Smeđa cvetarka
 Dicaeum pygmaeum_Mala cvetarka
-Dicaeum trigonostigma_Orange-bellied Flowerpecker
-Dicaeum tristrami_Mottled Flowerpecker
-Dichrozona cincta_Banded Antbird
+Dicaeum trigonostigma_Narandžastotrba cvetarka
+Dicaeum tristrami_Pirgava cvetarka
+Dichrozona cincta_Šarena mravarka
 Dicrurus adsimilis_Račvorepi drongo
 Dicrurus aeneus_Bronzani drongo
 Dicrurus andamanensis_Andamanski drongo
 Dicrurus annectens_Vranokljuni drongo
 Dicrurus atripennis_Sjajni drongo
 Dicrurus balicassius_Balicassiao
-Dicrurus bracteatus_Spangled Drongo
+Dicrurus bracteatus_Širokorepi drongo
 Dicrurus caerulescens_Belotrbi drongo
 Dicrurus divaricatus_Glossy-backed Drongo
 Dicrurus forficatus_Ćubasti drongo
@@ -2031,7 +2031,7 @@ Ducula zoeae_Zoin imperijalni golub
 Dulus dominicus_Palmarka
 Dumetella carolinensis_Siva mačkulja
 Dumetia atriceps_Dark-fronted Babbler
-Dumetia hyperythra_Tawny-bellied Babbler
+Dumetia hyperythra_Rumenotrba brbljuša
 Dysithamnus leucostictus_Drozdoliki batarito
 Dysithamnus mentalis_Jednobojni batarito
 Dysithamnus occidentalis_Dvobojni batarito
@@ -2056,21 +2056,21 @@ Elachura formosa_Pegava elahura
 Elaenia albiceps_Beloćuba elenija
 Elaenia brachyptera_Coopmans's Elaenia
 Elaenia chiriquensis_Mala elenija
-Elaenia cristata_Plain-crested Elaenia
-Elaenia fallax_Greater Antillean Elaenia
+Elaenia cristata_Ćubasta elenija
+Elaenia fallax_Elenija sa Velikih Antila
 Elaenia flavogaster_Žutotrba elenija
 Elaenia frantzii_Planinska elenija
-Elaenia gigas_Mottle-backed Elaenia
+Elaenia gigas_Pirgava elenija
 Elaenia martinica_Karipska elenija
 Elaenia mesoleuca_Olivaceous Elaenia
-Elaenia obscura_Highland Elaenia
+Elaenia obscura_Andska planinska elenija
 Elaenia olivina_Elenija iz Tepuija
-Elaenia pallatangae_Sierran Elaenia
+Elaenia pallatangae_Sijerska elenija
 Elaenia parvirostris_Sitnokljuna elenija
 Elaenia ruficeps_Rufous-crowned Elaenia
 Elaenia sordida_Small-headed Elaenia
 Elaenia spectabilis_Velika elenija
-Elaenia strepera_Slaty Elaenia
+Elaenia strepera_Škriljasta elenija
 Elanoides forficatus_Lastorepa lunja
 Elanus caeruleus_Bela lunja
 Elanus leucurus_Belorepa lunja
