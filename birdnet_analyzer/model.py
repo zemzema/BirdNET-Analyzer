@@ -872,8 +872,7 @@ def save_linear_classifier(classifier, model_path: str, labels: list[str], mode=
 
     # Save labels
     with open(model_path.replace(".tflite", "_Labels.txt"), "w", encoding="utf-8") as f:
-        for label in labels:
-            f.write(label + "\n")
+        f.writelines(label + "\n" for label in labels)
 
     save_model_params(model_path.replace(".tflite", "_Params.csv"))
 
@@ -1201,12 +1200,14 @@ def embeddings(sample):
 
     load_model(False)
 
+    sample = np.array(sample, dtype="float32")
+
     # Reshape input tensor
     INTERPRETER.resize_tensor_input(INPUT_LAYER_INDEX, [len(sample), *sample[0].shape])
     INTERPRETER.allocate_tensors()
 
     # Extract feature embeddings
-    INTERPRETER.set_tensor(INPUT_LAYER_INDEX, np.array(sample, dtype="float32"))
+    INTERPRETER.set_tensor(INPUT_LAYER_INDEX, sample)
     INTERPRETER.invoke()
 
     return INTERPRETER.get_tensor(OUTPUT_LAYER_INDEX)
